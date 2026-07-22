@@ -1,0 +1,46 @@
+# Git
+.git
+.gitignore
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# 虚拟环境
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 数据文件（不应打包进镜像，通过 PVC 挂载）
+data/
+*.db
+*.db-shm
+*.db-wal
+
+# 测试与文档
+tests/
+*.md
+docs/
+
+# Docker 自身
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# 构建产物
+dist/
+build/
+*.egg-info/
+
+# 环境变量文件（敏感信息）
+.env
+.env.*

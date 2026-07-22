@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+
+{% block title %}{{ ext_name }}{% endblock %}
+
+{% block content %}
+<div class="page-title">
+  <a href="/extensions" style="color:#1e9fff;text-decoration:none;"><i class="layui-icon layui-icon-return"></i> 扩展目录</a>
+  <span style="margin:0 8px;color:#ccc;">/</span>
+  <span id="ext-name-display">{{ ext_name }}</span>
+</div>
+
+<div id="ext-detail-container">
+  <div class="sg-card" style="text-align:center;padding:60px;">
+    <p style="color:#999;">加载中...</p>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+layui.use(['element'], function(){
+  var extName = '{{ ext_name }}';
+
+  fetch('/api/v1/extensions/' + encodeURIComponent(extName)).then(r => r.json()).then(res => {
+    var container = document.getElementById('ext-detail-container');
+    if (res.code !== 0 || !res.data || res.data.length === 0) {
+      container.innerHTML = '<div class="sg-card placeholder"><h2>扩展不存在</h2><p>未找到名为 "' + extName + '" 的扩展。</p></div>';
+      return;
+    }
+
+    var ext = res.data[0];
+    var typeBadge = ext.is_custom
+      ? '<span class="layui-badge layui-badge-orange">自定义</span>'
+      : '<span class="layui-badge layui-bg-blue">官方</span>';
+
+    var tagsHtml = '';
+    if (ext.tags && ext.tags.length > 0) {
+      tagsHtml = '<div style="margin-top:10px;">' + ext.tags.map(function(t) {
+        return '<span class="layui-badge layui-bg-gray">' + t + '</span>';
+      }).join(' ') + '</div>';
+    }
+
+    var channelsHtml = '';
+    if (ext.channels && Object.keys(ext.channels).length > 0) {
+      channelsHtml = '<div style="margin-top:10px;"><b>通道:</b> ' + Object.entries(ext.channels).map(function(kv) {
+        return '<span class="layui-badge layui-bg-green">' + kv[0] + ': ' + kv[1] + '</span>';
+      }).join(' ') + '</div>';
+    }
+
+    var versionsHtml = '';
+    if (ext.versions && ext.versions.length > 0) {
+      ext.versions.forEach(function(ver) {
+        versionsHtml += '<div style="margin-bottom:15px;border:1px solid #eee;border-radius:4px;padding:15px;">';
+        versionsHtml += '<div style="font-weight:600;font-size:15px;margin-bottom:8px;">版本 ' + ver.version + ' <span style="font-size:12px;color:#999;">(' + ver.channel + ')</span></div>';
+        if (ver.builds && ver.builds.length > 0) {
+          versionsHtml += '<table class="layui-table" style="margin:0;">';
+          versionsHtml += '<thead><tr><th>PG 版本</th><th>架构</th><th>OS</th><th>风味</th><th>构建号</th><th>包大小</th><th>状态</th></tr></thead>';
+          versionsHtml += '<tbody>';
+          ver.builds.forEach(function(b) {
+            var size = b.package_size ? (b.package_size / 1024 / 1024).toFixed(2) + ' MB' : '-';
+            var cached = b.cached ? '<span class="layui-badge layui-bg-green">已缓存</span>' : '<span class="layui-badge layui-bg-gray">未缓存</span>';
+            var verified = b.verified ? '<span class="layui-badge layui-bg-blue">已签名</span>' : '';
+            versionsHtml += '<tr>';
+            versionsHtml += '<td>' + b.postgres_version + '</td>';
+            versionsHtml += '<td>' + b.arch + '</td>';
+            versionsHtml += '<td>' + b.os + '</td>';
+            versionsHtml += '<td>' + b.flavor + '</td>';
+            versionsHtml += '<td>' + (b.build || '-') + '</td>';
+            versionsHtml += '<td>' + size + '</td>';
+            versionsHtml += '<td>' + cached + ' ' + verified + '</td>';
+            versionsHtml += '</tr>';
+          });
+          versionsHtml += '</tbody></table>';
+        } else {
+          versionsHtml += '<p style="color:#999;font-size:13px;">暂无构建信息</p>';
+        }
+        versionsHtml += '</div>';
+      });
+    } else {
+      versionsHtml = '<p style="color:#999;">暂无版本信息</p>';
+    }
+
+    var html = '<div class="sg-card">';
+    html += '<div style="display:flex;align-items:flex-start;gap:20px;">';
+    html += '<div style="flex:1;">';
+    html += '<h2 style="margin:0 0 10px 0;">' + ext.name + ' ' + typeBadge + '</h2>';
+    html += '<p style="color:#666;line-height:1.6;">' + (ext.description || '暂无描述') + '</p>';
+    if (ext.abstract) {
+      html += '<p style="color:#999;font-size:13px;margin-top:5px;">' + ext.abstract + '</p>';
+    }
+    html += tagsHtml;
+    html += channelsHtml;
+    html += '<div style="margin-top:15px;font-size:13px;color:#666;">';
+    html += '<span style="margin-right:20px;"><b>发布者:</b> ' + (ext.publisher || '-') + '</span>';
+    html += '<span style="margin-right:20px;"><b>许可证:</b> ' + (ext.license || '-') + '</span>';
+    if (ext.url) {
+      html += '<span><b>文档:</b> <a href="' + ext.url + '" target="_blank">' + ext.url + '</a></span>';
+    }
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+    html += '</div>';
+
+    html += '<div class="sg-card">';
+    html += '<div class="page-title" style="font-size:15px;">版本与构建</div>';
+    html += versionsHtml;
+    html += '</div>';
+
+    container.innerHTML = html;
+  }).catch(function(err) {
+    document.getElementById('ext-detail-container').innerHTML = '<div class="sg-card placeholder"><h2>加载失败</h2><p>' + err + '</p></div>';
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+
+{% block title %}审计日志{% endblock %}
+
+{% block content %}
+<div class="page-title">审计日志</div>
+
+<!-- 统计卡片 -->
+<div style="display:flex;gap:15px;margin-bottom:15px;" id="stats-bar">
+  <div class="sg-card" style="flex:1;text-align:center;padding:15px;">
+    <div style="font-size:24px;font-weight:700;" id="stat-total">-</div>
+    <div style="color:#999;font-size:12px;">总记录</div>
+  </div>
+  <div class="sg-card" style="flex:1;text-align:center;padding:15px;">
+    <div style="font-size:24px;font-weight:700;color:#5fb878;" id="stat-success">-</div>
+    <div style="color:#999;font-size:12px;">成功</div>
+  </div>
+  <div class="sg-card" style="flex:1;text-align:center;padding:15px;">
+    <div style="font-size:24px;font-weight:700;color:#ff5722;" id="stat-failure">-</div>
+    <div style="color:#999;font-size:12px;">失败</div>
+  </div>
+  <div class="sg-card" style="flex:1;text-align:center;padding:15px;">
+    <div style="font-size:24px;font-weight:700;color:#1e9fff;" id="stat-recent">-</div>
+    <div style="color:#999;font-size:12px;">近24h</div>
+  </div>
+</div>
+
+<!-- 筛选栏 -->
+<div class="sg-card" style="margin-bottom:15px;">
+  <div class="layui-form layui-form-pane">
+    <div class="layui-form-item" style="margin-bottom:0;">
+      <div class="layui-inline">
+        <div class="layui-input-inline" style="width:150px;">
+          <input type="text" id="filter-action" placeholder="动作" class="layui-input">
+        </div>
+        <select id="filter-result" style="width:100px;height:38px;border:1px solid #e6e6e6;border-radius:2px;">
+          <option value="">全部结果</option>
+          <option value="success">成功</option>
+          <option value="failure">失败</option>
+        </select>
+        <div class="layui-input-inline" style="width:140px;">
+          <input type="date" id="filter-start" class="layui-input">
+        </div>
+        <span style="line-height:38px;">~</span>
+        <div class="layui-input-inline" style="width:140px;">
+          <input type="date" id="filter-end" class="layui-input">
+        </div>
+        <button class="layui-btn" id="btn-search">搜索</button>
+        <button class="layui-btn layui-btn-primary" id="btn-reset">重置</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 日志列表 -->
+<table id="audit-table" lay-filter="audit-table"></table>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+// 从 localStorage 获取 token
+function getToken() {
+  return localStorage.getItem('sgerm_token') || '';
+}
+
+function authHeaders() {
+  return { 'Authorization': 'Bearer ' + getToken() };
+}
+
+layui.use(['table', 'layer'], function(){
+  var table = layui.table;
+
+  // 加载统计
+  function loadStats() {
+    fetch('/api/v1/audit/stats', { headers: authHeaders() })
+      .then(r => r.json()).then(res => {
+        if (res.code === 0) {
+          var d = res.data[0];
+          document.getElementById('stat-total').textContent = d.total;
+          document.getElementById('stat-success').textContent = d.success;
+          document.getElementById('stat-failure').textContent = d.failure;
+          document.getElementById('stat-recent').textContent = d.recent_24h;
+        }
+      });
+  }
+  loadStats();
+
+  // 渲染表格
+  table.render({
+    elem: '#audit-table',
+    url: '/api/v1/audit/logs',
+    headers: authHeaders(),
+    method: 'get',
+    parseData: function(res) {
+      return { code: res.code, msg: res.msg, count: res.count, data: res.data };
+    },
+    page: true,
+    limit: 20,
+    limits: [20, 50, 100],
+    cols: [[
+      { field: 'timestamp', title: '时间', width: 180, sort: true },
+      { field: 'actor', title: '操作者', width: 120 },
+      { field: 'action', title: '动作', width: 180 },
+      { field: 'resource', title: '资源', width: 280 },
+      { field: 'result', title: '结果', width: 80, templet: function(d) {
+        if (d.result === 'success') return '<span style="color:#5fb878;">成功</span>';
+        return '<span style="color:#ff5722;">失败</span>';
+      }},
+      { field: 'client_ip', title: 'IP', width: 130 },
+      { title: '详情', minWidth: 120, templet: function(d) {
+        if (!d.detail) return '-';
+        var status = d.detail.status_code || '';
+        var duration = d.detail.duration_ms ? d.detail.duration_ms + 'ms' : '';
+        return '<span style="font-size:12px;color:#999;">' + status + ' ' + duration + '</span>';
+      }},
+    ]],
+    skin: 'row',
+    even: true
+  });
+
+  // 搜索
+  document.getElementById('btn-search').onclick = function() {
+    var action = document.getElementById('filter-action').value;
+    var result = document.getElementById('filter-result').value;
+    var start = document.getElementById('filter-start').value;
+    var end = document.getElementById('filter-end').value;
+    table.reload('audit-table', {
+      where: { action: action, result: result, start_date: start, end_date: end },
+      page: { curr: 1 }
+    });
+  };
+
+  document.getElementById('btn-reset').onclick = function() {
+    document.getElementById('filter-action').value = '';
+    document.getElementById('filter-result').value = '';
+    document.getElementById('filter-start').value = '';
+    document.getElementById('filter-end').value = '';
+    table.reload('audit-table', {
+      where: { action: '', result: '', start_date: '', end_date: '' },
+      page: { curr: 1 }
+    });
+  };
+});
+</script>
+{% endblock %}

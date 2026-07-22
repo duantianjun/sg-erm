@@ -1,0 +1,177 @@
+# SG-ERM K8s 部署清单
+# 单容器 FastAPI 一体化部署（替代旧的 nginx + CronJob 方案）
+#
+# 使用方法:
+#   kubectl apply -f k8s/sg-erm.yaml
+#
+# 架构说明:
+#   - 单 Deployment + 单 PVC (RWO)
+#   - FastAPI 容器同时提供: Web UI / REST API / StackGres 兼容代理 / 定时同步
+#   - 数据持久化: SQLite (sg-erm.db) + 扩展包文件，均存储在 PVC 中
+#   - 同步任务通过 Web UI 或 API 触发，无需独立 CronJob
+
+# ─── 1. 命名空间 ─────────────────────────────────────
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: stackgres
+---
+# ─── 2. PVC (ReadWriteOnce) ──────────────────────────
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sg-erm-data
+  namespace: stackgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  # storageClassName: ssd  # 按需指定存储类，建议 SSD
+---
+# ─── 3. ConfigMap (可选：预置仓库源和白名单) ──────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sg-erm-config
+  namespace: stackgres
+data:
+  # 这些环境变量可在容器启动时覆盖默认配置
+  SG_ERM_PROXY_MODE: "hybrid"
+  SG_ERM_SYNC_CONCURRENCY: "8"
+  SG_ERM_UPSTREAM_REPO_URL: "https://extensions.stackgres.io/postgres/repository"
+  SG_ERM_CACHE_MAX_DISK_USAGE: "80"
+  SG_ERM_CACHE_TTL_DAYS: "7"
+  SG_ERM_CACHE_KEEP_VERSIONS: "3"
+---
+# ─── 4. Secret (JWT 密钥) ─────────────────────────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sg-erm-secret
+  namespace: stackgres
+type: Opaque
+stringData:
+  # 生产环境必须修改！
+  SG_ERM_SECRET_KEY: "change-me-to-a-random-string-in-production"
+---
+# ─── 5. Deployment ────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sg-erm
+  namespace: stackgres
+  labels:
+    app: sg-erm
+spec:
+  replicas: 1  # 单副本：SQLite + 本地文件存储不支持多写
+  selector:
+    matchLabels:
+      app: sg-erm
+  strategy:
+    type: Recreate  # PVC 是 RWO，滚动更新会失败，使用 Recreate
+  template:
+    metadata:
+      labels:
+        app: sg-erm
+    spec:
+      containers:
+        - name: sg-erm
+          # 镜像地址：按需修改为你的镜像仓库
+          image: 192.168.24.18/common/sg-erm:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 18070
+              name: http
+          envFrom:
+            - configMapRef:
+                name: sg-erm-config
+            - secretRef:
+                name: sg-erm-secret
+          env:
+            - name: SG_ERM_DATA_DIR
+              value: /data
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # 就绪探针：检查 /health 端点
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          # 存活探针：检查 /health 端点
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # 启动探针：给数据库迁移留时间
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12  # 最多等待 60 秒
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sg-erm-data
+---
+# ─── 6. Service ──────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: sg-erm
+  namespace: stackgres
+spec:
+  type: ClusterIP  # 集群内部访问；如需外部访问改为 NodePort 或 Ingress
+  selector:
+    app: sg-erm
+  ports:
+    - name: http
+      port: 18070
+      targetPort: http
+      protocol: TCP
+---
+# ─── 7. NetworkPolicy (安全加固) ─────────────────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sg-erm-access
+  namespace: stackgres
+spec:
+  podSelector:
+    matchLabels:
+      app: sg-erm
+  policyTypes:
+    - Ingress
+  ingress:
+    # 允许同命名空间的 Pod 访问（StackGres 集群）
+    - from:
+        - podSelector: {}
+      ports:
+        - port: 18070
+          protocol: TCP
+    # 允许带 monitoring 标签的命名空间访问（Prometheus 抓取 /metrics）
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              monitoring: "true"
+      ports:
+        - port: 18070
+          protocol: TCP

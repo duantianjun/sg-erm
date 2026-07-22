@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}SG-ERM{% endblock %} - StackGres 扩展仓库管理</title>
+  <link rel="stylesheet" href="/static/layui/css/layui.css">
+  <style>
+    /* 全局基础样式 */
+    html, body { height: 100%; margin: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      background: #f2f3f5;
+      color: #333;
+    }
+    /* 顶部导航 */
+    .sg-header {
+      background: #1e9fff;
+      color: #fff;
+      padding: 0 20px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .sg-header .logo {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 1px;
+    }
+    .sg-header .logo .sub {
+      font-size: 12px;
+      font-weight: 400;
+      opacity: 0.85;
+      margin-left: 8px;
+    }
+    .sg-header .header-right {
+      margin-left: auto;
+      font-size: 13px;
+    }
+    /* 主体容器 */
+    .sg-container {
+      display: flex;
+      min-height: calc(100vh - 60px);
+    }
+    .sg-sidebar {
+      width: 200px;
+      background: #2f4056;
+      color: #c2c2c2;
+    }
+    .sg-sidebar .layui-nav {
+      background: transparent;
+    }
+    .sg-content {
+      flex: 1;
+      padding: 20px;
+      overflow-y: auto;
+    }
+    /* 卡片 */
+    .sg-card {
+      background: #fff;
+      border-radius: 4px;
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      margin-bottom: 20px;
+    }
+    /* 统计卡片网格 */
+    .stat-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 20px;
+    }
+    .stat-card {
+      background: #fff;
+      border-radius: 4px;
+      padding: 20px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .stat-card .label {
+      font-size: 13px;
+      color: #999;
+      margin-bottom: 8px;
+    }
+    .stat-card .value {
+      font-size: 28px;
+      font-weight: 700;
+      color: #333;
+    }
+    .stat-card .value.accent { color: #1e9fff; }
+    .stat-card .value.success { color: #5fb878; }
+    .stat-card .value.warn { color: #ffb800; }
+    .stat-card .value.danger { color: #ff5722; }
+    /* 占位页 */
+    .placeholder {
+      text-align: center;
+      padding: 80px 20px;
+      color: #999;
+    }
+    .placeholder h2 {
+      font-size: 24px;
+      color: #333;
+      margin-bottom: 10px;
+    }
+    .placeholder p {
+      color: #999;
+      font-size: 14px;
+    }
+    /* 页面标题 */
+    .page-title {
+      font-size: 18px;
+      font-weight: 600;
+      margin-bottom: 16px;
+      color: #333;
+    }
+  </style>
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <header class="sg-header">
+    <div class="logo">
+      SG-ERM
+      <span class="sub">StackGres Extension Repository Manager</span>
+    </div>
+    <div class="header-right" style="display:flex;align-items:center;gap:16px;">
+      <span>代理模式: {{ proxy_mode | default("hybrid") }}</span>
+      <span id="userInfo" style="display:none;">
+        <i class="layui-icon layui-icon-username"></i>
+        <span id="userName"></span>
+        <a href="javascript:;" onclick="doLogout()" style="color:#fff;margin-left:8px;opacity:0.8;">退出</a>
+      </span>
+      <a id="loginLink" href="/login" style="color:#fff;opacity:0.8;">登录</a>
+    </div>
+  </header>
+
+  <div class="sg-container">
+    <aside class="sg-sidebar">
+      <ul class="layui-nav layui-nav-tree" lay-filter="sg-sidebar">
+        <li class="layui-nav-item {% if active_nav == 'dashboard' %}layui-this{% endif %}">
+          <a href="/"><i class="layui-icon layui-icon-console"></i> 仪表盘</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'extensions' %}layui-this{% endif %}">
+          <a href="/extensions"><i class="layui-icon layui-icon-component"></i> 扩展目录</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'sync' %}layui-this{% endif %}">
+          <a href="/sync"><i class="layui-icon layui-icon-refresh-3"></i> 同步任务</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'sources' %}layui-this{% endif %}">
+          <a href="/sources"><i class="layui-icon layui-icon-website"></i> 仓库源</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'publish' %}layui-this{% endif %}">
+          <a href="/publish"><i class="layui-icon layui-icon-upload"></i> 自定义扩展</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'repo_files' %}layui-this{% endif %}">
+          <a href="/repo-files"><i class="layui-icon layui-icon-template-1"></i> 仓库文件</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'whitelist' %}layui-this{% endif %}">
+          <a href="/whitelist"><i class="layui-icon layui-icon-list"></i> 全局白名单</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'audit' %}layui-this{% endif %}">
+          <a href="/audit"><i class="layui-icon layui-icon-log"></i> 审计日志</a>
+        </li>
+        <li class="layui-nav-item {% if active_nav == 'settings' %}layui-this{% endif %}">
+          <a href="/settings"><i class="layui-icon layui-icon-set"></i> 系统设置</a>
+        </li>
+      </ul>
+    </aside>
+
+    <main class="sg-content">
+      {% block content %}
+      <div class="sg-card placeholder">
+        <h2>{{ title | default("SG-ERM") }}</h2>
+        <p>页面建设中... Task 5 将完整实现。</p>
+      </div>
+      {% endblock %}
+    </main>
+  </div>
+
+  <script src="/static/layui/layui.js"></script>
+  <script>
+    // layui 扩展模块目录
+    layui.config({ base: '/static/layui_exts/' });
+    // ─── 登录态管理 ──────────────────────────────────────
+    (function(){
+      var token = localStorage.getItem('sgerm_token');
+      var userJson = localStorage.getItem('sgerm_user');
+      var user = null;
+      try { user = JSON.parse(userJson); } catch(e) {}
+
+      if (token && user) {
+        document.getElementById('userInfo').style.display = '';
+        document.getElementById('userName').textContent = user.username;
+        document.getElementById('loginLink').style.display = 'none';
+      } else {
+        // 未登录且不在登录页 → 跳转登录
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+    })();
+
+    function doLogout() {
+      localStorage.removeItem('sgerm_token');
+      localStorage.removeItem('sgerm_refresh');
+      localStorage.removeItem('sgerm_user');
+      window.location.href = '/login';
+    }
+
+    // API 请求辅助：自动带 token
+    function apiFetch(url, opts) {
+      opts = opts || {};
+      opts.headers = opts.headers || {};
+      var token = localStorage.getItem('sgerm_token');
+      if (token) {
+        opts.headers['Authorization'] = 'Bearer ' + token;
+      }
+      return fetch(url, opts).then(function(r){
+        if (r.status === 401) {
+          doLogout();
+          return Promise.reject(new Error('登录已过期'));
+        }
+        return r;
+      });
+    }
+
+    // 全局拦截 XMLHttpRequest，给 /api/ 请求自动注入 Authorization
+    (function(){
+      var origOpen = XMLHttpRequest.prototype.open;
+      var origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
+      XMLHttpRequest.prototype.open = function(method, url) {
+        this._sgerm_url = url;
+        return origOpen.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.setRequestHeader = function(header, value) {
+        if (header.toLowerCase() === 'authorization') {
+          this._sgerm_has_auth = true;
+        }
+        return origSetHeader.apply(this, arguments);
+      };
+      // 拦截 send，在发送前补充 token
+      var origSend = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.send = function(body) {
+        var url = this._sgerm_url || '';
+        if (typeof url === 'string' && url.indexOf('/api/') === 0 && !this._sgerm_has_auth) {
+          var token = localStorage.getItem('sgerm_token');
+          if (token) {
+            origSetHeader.call(this, 'Authorization', 'Bearer ' + token);
+          }
+        }
+        return origSend.apply(this, arguments);
+      };
+    })();
+
+    layui.use(['element'], function(){
+      var element = layui.element;
+      element.init();
+    });
+  </script>
+  {% block extra_script %}{% endblock %}
+</body>
+</html>

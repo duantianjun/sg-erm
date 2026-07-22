@@ -1,0 +1,165 @@
+{% extends "base.html" %}
+
+{% block title %}系统设置{% endblock %}
+
+{% block content %}
+<div class="page-title">系统设置</div>
+
+<!-- 代理模式 -->
+<div class="sg-card" style="margin-bottom:20px;">
+  <div class="page-title" style="font-size:15px;">代理模式</div>
+  <div style="color:#666;font-size:13px;margin-bottom:10px;">控制 StackGres 兼容接口的缓存行为。</div>
+  <table class="layui-table" style="margin:0;">
+    <tbody>
+      <tr><td width="150">hybrid（默认）</td><td>预同步白名单 + 代理兜底</td></tr>
+      <tr><td>strict</td><td>仅返回本地已缓存的包，未命中返回 404</td></tr>
+      <tr><td>proxy_only</td><td>不预同步，所有请求按需从上游代理</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:8px;font-size:12px;color:#999;">当前模式通过环境变量 SG_ERM_PROXY_MODE 配置，重启后生效。</div>
+</div>
+
+<!-- 缓存策略 -->
+<div class="sg-card" style="margin-bottom:20px;">
+  <div class="page-title" style="font-size:15px;">缓存策略</div>
+  <table class="layui-table" style="margin:0;">
+    <tbody>
+      <tr><td width="180">磁盘阈值</td><td>使用率超过 80% 时触发 LRU 淘汰，直到降到 70%</td></tr>
+      <tr><td>TTL</td><td>超过 7 天未访问的缓存包在下次同步时清理</td></tr>
+      <tr><td>版本保留</td><td>每个扩展最多保留 3 个版本</td></tr>
+    </tbody>
+  </table>
+  <div style="margin-top:10px;">
+    <button class="layui-btn layui-btn-sm" id="btn-evict-full">执行全部淘汰</button>
+    <button class="layui-btn layui-btn-sm layui-btn-warm" id="btn-evict-ttl">仅 TTL 清理</button>
+  </div>
+  <div id="evict-result" style="margin-top:8px;font-size:13px;display:none;"></div>
+</div>
+
+<!-- 安全 -->
+<div class="sg-card" style="margin-bottom:20px;">
+  <div class="page-title" style="font-size:15px;">安全</div>
+  <div style="color:#666;font-size:13px;margin-bottom:10px;">默认管理员账号 <code>admin</code>，请尽快修改密码。</div>
+  <div style="margin-top:10px;">
+    <button class="layui-btn layui-btn-sm" id="btn-change-pwd">修改密码</button>
+  </div>
+</div>
+
+<!-- 监控 -->
+<div class="sg-card" style="margin-bottom:20px;">
+  <div class="page-title" style="font-size:15px;">监控</div>
+  <p style="color:#666;font-size:13px;">
+    Prometheus 指标端点：<code>/metrics</code><br>
+    健康检查端点：<code>/health</code>
+  </p>
+</div>
+
+<!-- 系统信息 -->
+<div class="sg-card">
+  <div class="page-title" style="font-size:15px;">系统信息</div>
+  <table class="layui-table" style="margin:0;">
+    <tbody>
+      <tr><td width="180">版本</td><td>0.1.0</td></tr>
+      <tr><td>数据目录</td><td id="info-data-dir">-</td></tr>
+      <tr><td>上游仓库</td><td id="info-upstream">-</td></tr>
+      <tr><td>监听端口</td><td>18070</td></tr>
+      <tr><td>并发下载数</td><td>8</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+function getToken() {
+  return localStorage.getItem('sgerm_token') || '';
+}
+function authHeaders() {
+  return { 'Authorization': 'Bearer ' + getToken() };
+}
+
+layui.use(['layer', 'form'], function(){
+  var layer = layui.layer;
+  var form = layui.form;
+
+  // 加载系统信息
+  fetch('/api/v1/dashboard/stats', { headers: authHeaders() }).then(r => r.json()).then(res => {
+    if (res.code === 0) {
+      // 从磁盘信息推断数据目录
+      var disk = res.data[0].disk;
+      document.getElementById('info-data-dir').textContent = '/data (磁盘使用: ' + disk.usage_percent + '%)';
+    }
+  });
+  fetch('/health').then(r => r.json()).then(res => {
+    document.getElementById('info-upstream').textContent = res.proxy_mode + ' 模式';
+  });
+
+  // 缓存淘汰
+  function doEvict(mode, btn) {
+    btn.disabled = true;
+    btn.textContent = '执行中...';
+    fetch('/api/v1/dashboard/cache/evict?mode=' + mode, {
+      method: 'POST',
+      headers: authHeaders()
+    }).then(r => r.json()).then(res => {
+      btn.disabled = false;
+      btn.textContent = btn.dataset.label || '执行';
+      var el = document.getElementById('evict-result');
+      el.style.display = 'block';
+      if (res.code === 0) {
+        var d = res.data[0];
+        el.innerHTML = '<span style="color:#5fb878;">淘汰完成</span>：共清理 ' + (d.total_evicted || 0) + ' 个包，释放 ' + ((d.total_freed_bytes || 0) / 1024 / 1024).toFixed(2) + ' MB';
+        if (d.disk_after) {
+          el.innerHTML += ' | 当前磁盘: ' + d.disk_after.usage_percent + '%';
+        }
+      } else {
+        el.innerHTML = '<span style="color:#ff5722;">淘汰失败: ' + (res.msg || '') + '</span>';
+      }
+    });
+  }
+
+  document.getElementById('btn-evict-full').dataset.label = '执行全部淘汰';
+  document.getElementById('btn-evict-ttl').dataset.label = '仅 TTL 清理';
+  document.getElementById('btn-evict-full').onclick = function() { doEvict('full', this); };
+  document.getElementById('btn-evict-ttl').onclick = function() { doEvict('ttl', this); };
+
+  // 修改密码
+  document.getElementById('btn-change-pwd').onclick = function() {
+    var html = '<form class="layui-form" id="pwd-form" style="padding:20px;">';
+    html += '<div class="layui-form-item"><label class="layui-form-label">原密码</label>';
+    html += '<div class="layui-input-block"><input type="password" name="old_password" required lay-verify="required" class="layui-input" id="pwd-old"></div></div>';
+    html += '<div class="layui-form-item"><label class="layui-form-label">新密码</label>';
+    html += '<div class="layui-input-block"><input type="password" name="new_password" required lay-verify="required" class="layui-input" id="pwd-new"></div></div>';
+    html += '<div class="layui-form-item" style="margin-bottom:0;"><div class="layui-input-block">';
+    html += '<button type="button" class="layui-btn" id="pwd-submit">确认修改</button>';
+    html += '</div></div>';
+    html += '</form>';
+
+    var idx = layer.open({ title: '修改密码', content: html, area: ['420px', '260px'], success: function(){
+      document.getElementById('pwd-submit').onclick = function() {
+        var oldPwd = document.getElementById('pwd-old').value.trim();
+        var newPwd = document.getElementById('pwd-new').value.trim();
+        if (!oldPwd || !newPwd) {
+          layer.msg('请填写完整', { icon: 2 });
+          return;
+        }
+        apiFetch('/api/v1/auth/change-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
+        }).then(function(r) { return r.json(); }).then(function(res) {
+          if (res.code === 0) {
+            layer.close(idx);
+            layer.msg('密码修改成功，请重新登录', { icon: 1, time: 2000 }, function() {
+              doLogout();
+            });
+          } else {
+            layer.msg(res.msg || '修改失败', { icon: 2 });
+          }
+        });
+      };
+    }});
+  };
+});
+</script>
+{% endblock %}

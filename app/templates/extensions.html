@@ -1,0 +1,107 @@
+{% extends "base.html" %}
+
+{% block title %}扩展目录{% endblock %}
+
+{% block content %}
+<div class="page-title">扩展目录</div>
+
+<!-- 搜索栏 -->
+<div class="sg-card" style="margin-bottom:15px;">
+  <div class="layui-form layui-form-pane">
+    <div class="layui-form-item" style="margin-bottom:0;">
+      <div class="layui-inline">
+        <div class="layui-input-inline" style="width:200px;">
+          <input type="text" id="search-keyword" placeholder="搜索扩展名或描述" class="layui-input">
+        </div>
+        <button class="layui-btn" id="btn-search">搜索</button>
+        <button class="layui-btn layui-btn-primary" id="btn-reset">重置</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 扩展列表 -->
+<table id="extensions-table" lay-filter="extensions-table"></table>
+
+<!-- 操作列模板 -->
+<script type="text/html" id="is-custom-tpl">
+  {% raw %}{{# if(d.is_custom){ }}{% endraw %} <span class="layui-badge layui-badge-orange">自定义</span> {% raw %}{{# } else { }}{% endraw %} <span class="layui-badge layui-bg-blue">官方</span> {% raw %}{{# } }}{% endraw %}
+</script>
+
+{% endblock %}
+
+{% block extra_script %}
+<script>
+layui.use(['table'], function(){
+  var table = layui.table;
+
+  // 渲染表格
+  table.render({
+    elem: '#extensions-table',
+    url: '/api/v1/extensions',
+    method: 'get',
+    where: { page: 1, limit: 20 },
+    parseData: function(res) {
+      return {
+        code: res.code,
+        msg: res.msg,
+        count: res.count,
+        data: res.data
+      };
+    },
+    page: true,
+    limit: 20,
+    limits: [10, 20, 50, 100],
+    cols: [[
+      { field: 'name', title: '扩展名', width: 180, sort: true },
+      { field: 'description', title: '描述', minWidth: 300 },
+      { field: 'publisher', title: '发布者', width: 120 },
+      { field: 'license', title: '许可证', width: 100 },
+      { field: 'version_count', title: '版本数', width: 90, sort: true },
+      { field: 'build_count', title: '构建数', width: 90, sort: true },
+      { field: 'is_custom', title: '类型', width: 90, templet: '#is-custom-tpl' },
+      { title: '操作', width: 100, toolbar: '#row-ops', fixed: 'right' }
+    ]],
+    skin: 'row',
+    even: true
+  });
+
+  // 搜索
+  document.getElementById('btn-search').onclick = function() {
+    var keyword = document.getElementById('search-keyword').value;
+    table.reload('extensions-table', {
+      where: { keyword: keyword, page: 1 },
+      page: { curr: 1 }
+    });
+  };
+
+  // 回车搜索
+  document.getElementById('search-keyword').onkeyup = function(e) {
+    if (e.key === 'Enter') {
+      document.getElementById('btn-search').click();
+    }
+  };
+
+  // 重置
+  document.getElementById('btn-reset').onclick = function() {
+    document.getElementById('search-keyword').value = '';
+    table.reload('extensions-table', {
+      where: { keyword: '', page: 1 },
+      page: { curr: 1 }
+    });
+  };
+
+  // 行操作
+  table.on('tool(extensions-table)', function(obj) {
+    var data = obj.data;
+    if (obj.event === 'detail') {
+      window.location.href = '/extensions/' + encodeURIComponent(data.name);
+    }
+  });
+});
+</script>
+
+<script type="text/html" id="row-ops">
+  <button class="layui-btn layui-btn-xs" lay-event="detail">详情</button>
+</script>
+{% endblock %}

@@ -1,0 +1,212 @@
+{% extends "base.html" %}
+
+{% block title %}全局白名单{% endblock %}
+
+{% block content %}
+<div class="page-title" style="display:flex;justify-content:space-between;align-items:center;">
+  <span>全局白名单</span>
+  <button class="layui-btn layui-btn-normal" id="btn-add-whitelist">
+    <i class="layui-icon layui-icon-add-1"></i> 添加条目
+  </button>
+</div>
+
+<!-- 说明卡片 -->
+<div class="sg-card" style="margin-bottom:15px;padding:12px 20px;background:#f8f9fa;">
+  <p style="margin:0;color:#666;font-size:13px;">
+    全局白名单定义所有同步策略共享的基线扩展。
+    预同步阶段会下载白名单中的扩展包，保证本地可用；未在白名单中的扩展由代理模式从上游拉取。
+  </p>
+</div>
+
+<!-- 搜索栏 -->
+<div class="sg-card" style="margin-bottom:15px;">
+  <div class="layui-form layui-form-pane">
+    <div class="layui-form-item" style="margin-bottom:0;">
+      <div class="layui-inline">
+        <div class="layui-input-inline" style="width:240px;">
+          <input type="text" id="search-keyword" placeholder="搜索扩展名" class="layui-input">
+        </div>
+        <button class="layui-btn" id="btn-search">搜索</button>
+        <button class="layui-btn layui-btn-primary" id="btn-reset">重置</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 白名单列表 -->
+<table id="whitelist-table" lay-filter="whitelist-table"></table>
+
+{% endblock %}
+
+{% block extra_script %}
+<script>
+layui.use(['table', 'layer', 'form'], function(){
+  var table = layui.table;
+  var layer = layui.layer;
+  var form = layui.form;
+
+  // 渲染表格
+  table.render({
+    elem: '#whitelist-table',
+    url: '/api/v1/whitelist',
+    method: 'get',
+    parseData: function(res) {
+      return {
+        code: res.code,
+        msg: res.msg,
+        count: res.count,
+        data: res.data
+      };
+    },
+    page: true,
+    limit: 20,
+    limits: [10, 20, 50, 100],
+    cols: [[
+      { field: 'extension_name', title: '扩展名', width: 220, sort: true },
+      { field: 'postgres_versions', title: 'PG 版本范围', minWidth: 200, templet: function(d) {
+        if (!d.postgres_versions || d.postgres_versions.length === 0) {
+          return '<span style="color:#999;">全部</span>';
+        }
+        return d.postgres_versions.map(function(v) {
+          return '<span class="layui-badge layui-bg-blue">' + v + '</span>';
+        }).join(' ');
+      }},
+      { field: 'arch', title: '架构', width: 200, templet: function(d) {
+        if (!d.arch || d.arch.length === 0) {
+          return '<span style="color:#999;">全部</span>';
+        }
+        return d.arch.map(function(a) {
+          return '<span class="layui-badge layui-bg-green">' + a + '</span>';
+        }).join(' ');
+      }},
+      { field: 'created_at', title: '创建时间', width: 180, templet: function(d) {
+        return d.created_at ? d.created_at.replace('T', ' ').substring(0, 19) : '-';
+      }},
+      { title: '操作', width: 100, toolbar: '#row-ops', fixed: 'right' }
+    ]],
+    skin: 'row',
+    even: true
+  });
+
+  // 添加表单 HTML
+  function buildForm() {
+    var html = '<form class="layui-form" style="padding:20px;">';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">扩展名</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="extension_name" required lay-verify="required" placeholder="如：postgis" class="layui-input">';
+    html += '</div></div>';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">PG 版本范围</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="postgres_versions" placeholder="留空=全部，多个用逗号分隔，如：>=16.0,15.4" class="layui-input">';
+    html += '<div style="font-size:12px;color:#999;margin-top:5px;">支持版本约束表达式，留空表示适用所有 PG 版本</div>';
+    html += '</div></div>';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">架构</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="arch" placeholder="留空=全部，多个用逗号分隔，如：x86_64,aarch64" class="layui-input">';
+    html += '<div style="font-size:12px;color:#999;margin-top:5px;">留空表示适用所有架构</div>';
+    html += '</div></div>';
+    html += '<div class="layui-form-item" style="margin-bottom:0;">';
+    html += '<div class="layui-input-block">';
+    html += '<button class="layui-btn" lay-submit lay-filter="save-whitelist">保存</button>';
+    html += '<button type="reset" class="layui-btn layui-btn-primary">重置</button>';
+    html += '</div></div>';
+    html += '</form>';
+    return html;
+  }
+
+  // 添加
+  document.getElementById('btn-add-whitelist').onclick = function() {
+    layer.open({
+      title: '添加白名单条目',
+      content: buildForm(),
+      area: ['550px', '380px'],
+      success: function() {
+        form.render();
+      }
+    });
+
+    form.on('submit(save-whitelist)', function(data) {
+      var body = {
+        extension_name: data.field.extension_name
+      };
+      // 解析 PG 版本范围
+      if (data.field.postgres_versions) {
+        body.postgres_versions = data.field.postgres_versions.split(',')
+          .map(function(s) { return s.trim(); })
+          .filter(function(s) { return s; });
+      }
+      // 解析架构
+      if (data.field.arch) {
+        body.arch = data.field.arch.split(',')
+          .map(function(s) { return s.trim(); })
+          .filter(function(s) { return s; });
+      }
+      apiFetch('/api/v1/whitelist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
+      }).then(r => r.json()).then(res => {
+        if (res.code === 0) {
+          layer.closeAll();
+          layer.msg('添加成功', { icon: 1 });
+          table.reload('whitelist-table');
+        } else {
+          layer.msg(res.msg || '添加失败', { icon: 2 });
+        }
+      });
+      return false;
+    });
+  };
+
+  // 搜索
+  document.getElementById('btn-search').onclick = function() {
+    var keyword = document.getElementById('search-keyword').value;
+    table.reload('whitelist-table', {
+      where: { keyword: keyword, page: 1 },
+      page: { curr: 1 }
+    });
+  };
+
+  document.getElementById('search-keyword').onkeyup = function(e) {
+    if (e.key === 'Enter') {
+      document.getElementById('btn-search').click();
+    }
+  };
+
+  document.getElementById('btn-reset').onclick = function() {
+    document.getElementById('search-keyword').value = '';
+    table.reload('whitelist-table', {
+      where: { keyword: '', page: 1 },
+      page: { curr: 1 }
+    });
+  };
+
+  // 行操作
+  table.on('tool(whitelist-table)', function(obj) {
+    var data = obj.data;
+    if (obj.event === 'delete') {
+      layer.confirm('确定删除白名单条目 "' + data.extension_name + '"？', function(index) {
+        apiFetch('/api/v1/whitelist/' + data.id, { method: 'DELETE' })
+          .then(r => r.json())
+          .then(res => {
+            if (res.code === 0) {
+              layer.msg('删除成功', { icon: 1 });
+              table.reload('whitelist-table');
+            } else {
+              layer.msg(res.msg || '删除失败', { icon: 2 });
+            }
+          });
+        layer.close(index);
+      });
+    }
+  });
+});
+</script>
+
+<script type="text/html" id="row-ops">
+  <button class="layui-btn layui-btn-xs layui-btn-danger" lay-event="delete">删除</button>
+</script>
+{% endblock %}

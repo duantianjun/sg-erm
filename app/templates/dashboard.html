@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block title %}仪表盘{% endblock %}
+
+{% block content %}
+<div class="page-title">仪表盘</div>
+
+<!-- 统计卡片 -->
+<div class="stat-grid" id="stat-cards">
+  <div class="stat-card">
+    <div class="label">扩展总数</div>
+    <div class="value accent" id="stat-extensions">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">已缓存包</div>
+    <div class="value success" id="stat-packages">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">仓库源</div>
+    <div class="value" id="stat-sources">-</div>
+  </div>
+  <div class="stat-card">
+    <div class="label">白名单条目</div>
+    <div class="value" id="stat-whitelist">-</div>
+  </div>
+</div>
+
+<!-- 磁盘用量 -->
+<div class="sg-card">
+  <div class="page-title" style="font-size:15px;">磁盘用量</div>
+  <div class="layui-progress layui-progress-big" lay-filter="disk-progress">
+    <div class="layui-progress-bar" id="disk-bar" lay-percent="0%"></div>
+  </div>
+  <div style="margin-top:10px;display:flex;justify-content:space-between;font-size:13px;color:#666;">
+    <span id="disk-used">已用: -</span>
+    <span id="disk-total">总量: -</span>
+    <span id="disk-repo">仓库占用: -</span>
+  </div>
+</div>
+
+<!-- 最近同步任务 -->
+<div class="sg-card">
+  <div class="page-title" style="font-size:15px;display:flex;justify-content:space-between;align-items:center;">
+    <span>最近同步任务</span>
+    <a href="/sync" class="layui-btn layui-btn-sm layui-btn-normal">查看全部</a>
+  </div>
+  <table class="layui-table" id="recent-tasks-table">
+    <thead>
+      <tr>
+        <th>源</th>
+        <th>状态</th>
+        <th>总包数</th>
+        <th>已下载</th>
+        <th>失败</th>
+        <th>开始时间</th>
+      </tr>
+    </thead>
+    <tbody id="recent-tasks-body">
+      <tr><td colspan="6" style="text-align:center;color:#999;">加载中...</td></tr>
+    </tbody>
+  </table>
+</div>
+{% endblock %}
+
+{% block extra_script %}
+<script>
+layui.use(['element', 'table'], function(){
+  var element = layui.element;
+
+  // 加载统计数据
+  apiFetch('/api/v1/dashboard/stats').then(r => r.json()).then(res => {
+    if (res.code !== 0) return;
+    var stats = res.data[0];
+
+    // 统计卡片
+    document.getElementById('stat-extensions').textContent = stats.extensions.total;
+    document.getElementById('stat-packages').textContent = stats.packages.cached;
+    document.getElementById('stat-sources').textContent = stats.sources.enabled + '/' + stats.sources.total;
+    document.getElementById('stat-whitelist').textContent = stats.whitelist.total;
+
+    // 磁盘用量
+    var disk = stats.disk;
+    var pct = disk.usage_percent || 0;
+    element.render('progress', 'disk-progress', {
+      elem: '.layui-progress[lay-filter="disk-progress"]'
+    });
+    document.getElementById('disk-bar').style.width = pct + '%';
+    document.getElementById('disk-bar').setAttribute('lay-percent', pct + '%');
+
+    // 磁盘颜色
+    if (pct > 80) {
+      document.getElementById('disk-bar').style.backgroundColor = '#ff5722';
+    } else if (pct > 60) {
+      document.getElementById('disk-bar').style.backgroundColor = '#ffb800';
+    }
+
+    // 磁盘详情
+    var fmtSize = function(bytes) {
+      if (!bytes) return '0 B';
+      var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      var i = Math.floor(Math.log(bytes) / Math.log(1024));
+      return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+    };
+    document.getElementById('disk-used').textContent = '已用: ' + fmtSize(disk.used_bytes);
+    document.getElementById('disk-total').textContent = '总量: ' + fmtSize(disk.total_bytes);
+    document.getElementById('disk-repo').textContent = '仓库占用: ' + fmtSize(disk.repo_size_bytes) + ' (' + disk.file_count + ' 文件)';
+
+    // 最近同步任务
+    var tasks = stats.sync.recent || [];
+    var tbody = document.getElementById('recent-tasks-body');
+    if (tasks.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;">暂无同步任务</td></tr>';
+      return;
+    }
+    var statusColors = {
+      'completed': '#5fb878',
+      'running': '#1e9fff',
+      'failed': '#ff5722',
+      'cancelled': '#999',
+      'pending': '#ffb800'
+    };
+    tbody.innerHTML = tasks.map(function(t) {
+      var color = statusColors[t.status] || '#333';
+      return '<tr>' +
+        '<td>' + (t.source_name || '-') + '</td>' +
+        '<td style="color:' + color + ';font-weight:600;">' + t.status + '</td>' +
+        '<td>' + (t.total || 0) + '</td>' +
+        '<td>' + (t.downloaded || 0) + '</td>' +
+        '<td>' + (t.failed || 0) + '</td>' +
+        '<td>' + (t.started_at ? t.started_at.replace('T', ' ').substring(0, 19) : '-') + '</td>' +
+      '</tr>';
+    }).join('');
+  }).catch(function(err) {
+    console.error('加载统计数据失败:', err);
+  });
+});
+</script>
+{% endblock %}
