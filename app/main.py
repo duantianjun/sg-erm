@@ -305,32 +305,24 @@ async def extensions_page(request: Request) -> HTMLResponse:
 
 @app.get("/sync", response_class=HTMLResponse)
 async def sync_page(request: Request) -> HTMLResponse:
-    """同步任务页面。"""
+    """同步中心页面（含仓库源、全局白名单、同步任务、同步策略四个 Tab）。"""
     return templates.TemplateResponse(
         request,
         "sync.html",
-        {"title": "同步任务", "active_nav": "sync"},
+        {"title": "同步中心", "active_nav": "sync"},
     )
 
 
 @app.get("/sources", response_class=HTMLResponse)
 async def sources_page(request: Request) -> HTMLResponse:
-    """仓库源管理页面。"""
-    return templates.TemplateResponse(
-        request,
-        "sources.html",
-        {"title": "仓库源", "active_nav": "sources"},
-    )
+    """仓库源管理页面 → 重定向到同步中心 Tab 1。"""
+    return RedirectResponse(url="/sync", status_code=302)
 
 
 @app.get("/whitelist", response_class=HTMLResponse)
 async def whitelist_page(request: Request) -> HTMLResponse:
-    """全局白名单页面。"""
-    return templates.TemplateResponse(
-        request,
-        "whitelist.html",
-        {"title": "全局白名单", "active_nav": "whitelist"},
-    )
+    """全局白名单页面 → 重定向到同步中心 Tab 2。"""
+    return RedirectResponse(url="/sync", status_code=302)
 
 
 @app.get("/publish", response_class=HTMLResponse)

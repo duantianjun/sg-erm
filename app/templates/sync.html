@@ -1,16 +1,62 @@
 {% extends "base.html" %}
 
-{% block title %}同步任务{% endblock %}
+{% block title %}同步中心{% endblock %}
 
 {% block content %}
 <div class="layui-tab layui-tab-brief" lay-filter="sync-tab">
   <ul class="layui-tab-title">
-    <li class="layui-this">同步任务</li>
-    <li>同步策略</li>
+    <li class="layui-this" lay-id="tab-sources">仓库源</li>
+    <li lay-id="tab-whitelist">全局白名单</li>
+    <li lay-id="tab-tasks">同步任务</li>
+    <li lay-id="tab-policies">同步策略</li>
   </ul>
   <div class="layui-tab-content">
-    <!-- 同步任务 -->
+
+    <!-- Tab 1: 仓库源 -->
     <div class="layui-tab-item layui-show">
+      <div style="margin-bottom:15px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-weight:600;font-size:15px;">仓库源管理</span>
+        <button class="layui-btn layui-btn-normal" id="btn-add-source">
+          <i class="layui-icon layui-icon-add-1"></i> 添加仓库源
+        </button>
+      </div>
+      <table id="sources-table" lay-filter="sources-table"></table>
+    </div>
+
+    <!-- Tab 2: 全局白名单 -->
+    <div class="layui-tab-item">
+      <div style="margin-bottom:15px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-weight:600;font-size:15px;">全局白名单</span>
+        <button class="layui-btn layui-btn-normal" id="btn-add-whitelist">
+          <i class="layui-icon layui-icon-add-1"></i> 添加条目
+        </button>
+      </div>
+      <!-- 说明卡片 -->
+      <div class="sg-card" style="margin-bottom:15px;padding:12px 20px;background:#f8f9fa;">
+        <p style="margin:0;color:#666;font-size:13px;">
+          全局白名单定义所有同步策略共享的基线扩展。
+          预同步阶段会下载白名单中的扩展包，保证本地可用；未在白名单中的扩展由代理模式从上游拉取。
+        </p>
+      </div>
+      <!-- 搜索栏 -->
+      <div class="sg-card" style="margin-bottom:15px;padding:15px;">
+        <div class="layui-form">
+          <div class="layui-form-item" style="margin-bottom:0;">
+            <div class="layui-inline">
+              <div class="layui-input-inline" style="width:240px;">
+                <input type="text" id="search-keyword" placeholder="搜索扩展名" class="layui-input">
+              </div>
+              <button class="layui-btn" id="btn-search-whitelist">搜索</button>
+              <button class="layui-btn layui-btn-primary" id="btn-reset-whitelist">重置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <table id="whitelist-table" lay-filter="whitelist-table"></table>
+    </div>
+
+    <!-- Tab 3: 同步任务 -->
+    <div class="layui-tab-item">
       <div style="margin-bottom:15px;">
         <button class="layui-btn layui-btn-normal" id="btn-trigger-sync">
           <i class="layui-icon layui-icon-refresh"></i> 触发同步
@@ -19,7 +65,7 @@
       <table id="sync-tasks-table" lay-filter="sync-tasks-table"></table>
     </div>
 
-    <!-- 同步策略 -->
+    <!-- Tab 4: 同步策略 -->
     <div class="layui-tab-item">
       <div style="margin-bottom:15px;">
         <button class="layui-btn layui-btn-normal" id="btn-add-policy">
@@ -28,6 +74,7 @@
       </div>
       <table id="sync-policies-table" lay-filter="sync-policies-table"></table>
     </div>
+
   </div>
 </div>
 {% endblock %}
@@ -40,6 +87,9 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
   var form = layui.form;
   var element = layui.element;
 
+  // ─── Tab 懒加载 ────────────────────────────────────
+  var tabLoaded = { sources: false, whitelist: false, tasks: false, policies: false };
+
   // ─── 5字段Cron与7字段Cron互转 ──────────────────────
   function cron5to7(expr5) {
     if (!expr5) return '0 * * * * ? *';
@@ -51,13 +101,12 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
   function cron7to5(expr7) {
     if (!expr7) return '';
     var parts = expr7.trim().split(/\s+/);
-    // laycron 7字段：秒 分 时 日 月 周 年
     if (parts.length >= 7) return parts.slice(1, 6).join(' ');
     if (parts.length === 6) return parts.slice(1, 6).join(' ');
     return expr7;
   }
 
-  // ─── 通用 ──────────────────────────────────────────
+  // ─── 通用工具函数 ──────────────────────────────────
   function statusHtml(status) {
     var colors = {
       'completed': '#5fb878',
@@ -70,31 +119,387 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
     return '<span style="color:' + color + ';font-weight:600;">' + status + '</span>';
   }
 
-  // ─── 同步任务表格 ──────────────────────────────────
-  table.render({
-    elem: '#sync-tasks-table',
-    url: '/api/v1/sync/tasks',
-    method: 'get',
-    parseData: function(res) {
-      return { code: res.code, msg: res.msg, count: res.count, data: res.data };
-    },
-    page: true,
-    limit: 20,
-    cols: [[
-      { field: 'source_name', title: '仓库源', width: 150 },
-      { field: 'status', title: '状态', width: 100, templet: function(d) { return statusHtml(d.status); }},
-      { field: 'total', title: '总包数', width: 90, sort: true },
-      { field: 'downloaded', title: '已下载', width: 90 },
-      { field: 'failed', title: '失败', width: 80 },
-      { field: 'skipped', title: '跳过', width: 80 },
-      { field: 'started_at', title: '开始时间', width: 180, templet: function(d) {
-        return d.started_at ? d.started_at.replace('T', ' ').substring(0, 19) : '-';
-      }},
-      { title: '操作', width: 120, toolbar: '#task-ops', fixed: 'right' }
-    ]],
-    skin: 'row',
-    even: true
+  function healthHtml(status) {
+    var colors = {
+      'healthy': '#5fb878',
+      'degraded': '#ffb800',
+      'down': '#ff5722',
+      'unknown': '#999'
+    };
+    var labels = {
+      'healthy': '正常',
+      'degraded': '降级',
+      'down': '不可用',
+      'unknown': '未知'
+    };
+    var color = colors[status] || '#999';
+    var label = labels[status] || status;
+    return '<span style="color:' + color + ';font-weight:600;">' + label + '</span>';
+  }
+
+  function enabledHtml(enabled) {
+    if (enabled) {
+      return '<span class="layui-badge layui-bg-green">启用</span>';
+    }
+    return '<span class="layui-badge layui-bg-gray">禁用</span>';
+  }
+
+  // ════════════════════════════════════════════════════
+  // Tab 1: 仓库源
+  // ════════════════════════════════════════════════════
+
+  function renderSourcesTable() {
+    table.render({
+      elem: '#sources-table',
+      url: '/api/v1/sources',
+      method: 'get',
+      parseData: function(res) {
+        return { code: res.code, msg: res.msg, count: res.count, data: res.data };
+      },
+      page: false,
+      cols: [[
+        { field: 'name', title: '名称', width: 140 },
+        { field: 'url', title: 'URL', minWidth: 320, templet: function(d) {
+          return '<span style="font-family:monospace;font-size:12px;">' + d.url + '</span>';
+        }},
+        { field: 'enabled', title: '状态', width: 80, templet: function(d) {
+          return enabledHtml(d.enabled);
+        }},
+        { field: 'priority', title: '优先级', width: 80, sort: true },
+        { field: 'health_status', title: '健康', width: 90, templet: function(d) {
+          return healthHtml(d.health_status);
+        }},
+        { field: 'last_sync', title: '最后同步', width: 180, templet: function(d) {
+          return d.last_sync ? d.last_sync.replace('T', ' ').substring(0, 19) : '从未';
+        }},
+        { field: 'last_sync_status', title: '同步结果', width: 100, templet: function(d) {
+          if (!d.last_sync_status) return '-';
+          var colors = { 'success': '#5fb878', 'failed': '#ff5722', 'syncing': '#1e9fff' };
+          var color = colors[d.last_sync_status] || '#333';
+          return '<span style="color:' + color + ';">' + d.last_sync_status + '</span>';
+        }},
+        { title: '操作', width: 180, toolbar: '#source-row-ops', fixed: 'right' }
+      ]],
+      skin: 'row',
+      even: true
+    });
+  }
+  renderSourcesTable();
+  tabLoaded.sources = true;
+
+  // 仓库源表单
+  function buildSourceForm(d) {
+    d = d || {};
+    var html = '<form class="layui-form" style="padding:20px;" lay-filter="source-form">';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">名称</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="name" required lay-verify="required" placeholder="如：官方仓库" class="layui-input" value="' + (d.name || '') + '">';
+    html += '</div></div>';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">URL</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="url" required lay-verify="required" placeholder="https://extensions.stackgres.io/postgres/repository" class="layui-input" value="' + (d.url || '') + '">';
+    html += '</div></div>';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">优先级</label>';
+    html += '<div class="layui-input-inline" style="width:120px;">';
+    html += '<input type="number" name="priority" value="' + (d.priority !== undefined ? d.priority : 100) + '" class="layui-input">';
+    html += '</div>';
+    html += '<label class="layui-form-label" style="width:90px;">同步间隔(秒)</label>';
+    html += '<div class="layui-input-inline" style="width:120px;">';
+    html += '<input type="number" name="sync_interval" value="' + (d.sync_interval !== undefined ? d.sync_interval : 3600) + '" class="layui-input">';
+    html += '</div></div>';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">启用</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="checkbox" name="enabled" lay-skin="switch" lay-text="启用|禁用"' + (d.enabled === false ? '' : ' checked') + '>';
+    html += '</div></div>';
+    html += '</form>';
+    return html;
+  }
+
+  // 添加仓库源
+  document.getElementById('btn-add-source').onclick = function() {
+    layer.open({
+      title: '添加仓库源',
+      content: buildSourceForm({}),
+      area: ['600px', '400px'],
+      btn: ['保存', '取消'],
+      success: function() { form.render(); },
+      yes: function(index) {
+        var data = form.val('source-form');
+        data.enabled = data.enabled === 'on';
+        data.priority = parseInt(data.priority) || 100;
+        data.sync_interval = parseInt(data.sync_interval) || 3600;
+        apiFetch('/api/v1/sources', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        }).then(r => r.json()).then(res => {
+          if (res.code === 0) {
+            layer.close(index);
+            layer.msg('添加成功', { icon: 1 });
+            table.reload('sources-table');
+          } else {
+            layer.msg(res.msg || '添加失败', { icon: 2 });
+          }
+        });
+      }
+    });
+  };
+
+  // 仓库源行操作
+  table.on('tool(sources-table)', function(obj) {
+    var data = obj.data;
+    if (obj.event === 'edit') {
+      apiFetch('/api/v1/sources/' + data.id).then(r => r.json()).then(res => {
+        if (res.code !== 0) return;
+        var d = res.data[0];
+        layer.open({
+          title: '编辑仓库源',
+          content: buildSourceForm(d),
+          area: ['600px', '400px'],
+          btn: ['保存', '取消'],
+          success: function() { form.render(); },
+          yes: function(index) {
+            var formData = form.val('source-form');
+            formData.enabled = formData.enabled === 'on';
+            formData.priority = parseInt(formData.priority) || 100;
+            formData.sync_interval = parseInt(formData.sync_interval) || 3600;
+            apiFetch('/api/v1/sources/' + d.id, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(formData)
+            }).then(r => r.json()).then(res => {
+              if (res.code === 0) {
+                layer.close(index);
+                layer.msg('更新成功', { icon: 1 });
+                table.reload('sources-table');
+              } else {
+                layer.msg(res.msg || '更新失败', { icon: 2 });
+              }
+            });
+          }
+        });
+      });
+    } else if (obj.event === 'delete') {
+      layer.confirm('确定删除仓库源 "' + data.name + '"？关联的同步任务记录也会被删除。', function(index) {
+        apiFetch('/api/v1/sources/' + data.id, { method: 'DELETE' })
+          .then(r => r.json())
+          .then(res => {
+            if (res.code === 0) {
+              layer.msg('删除成功', { icon: 1 });
+              table.reload('sources-table');
+            } else {
+              layer.msg(res.msg || '删除失败', { icon: 2 });
+            }
+          });
+        layer.close(index);
+      });
+    } else if (obj.event === 'sync') {
+      // 触发该源的同步，成功后切换到同步任务 Tab
+      layer.confirm('立即同步仓库源 "' + data.name + '"？', function(index) {
+        apiFetch('/api/v1/sync/trigger', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ source_id: data.id })
+        }).then(r => r.json()).then(res => {
+          if (res.code === 0) {
+            layer.msg('同步任务已启动', { icon: 1 });
+            // 切换到同步任务 Tab
+            element.tabChange('sync-tab', 'tab-tasks');
+            setTimeout(function() {
+              if (!tabLoaded.tasks) { renderSyncTasksTable(); tabLoaded.tasks = true; }
+              table.reload('sync-tasks-table');
+            }, 2000);
+          } else {
+            layer.msg(res.msg || '启动失败', { icon: 2 });
+          }
+        });
+        layer.close(index);
+      });
+    }
   });
+
+  // ════════════════════════════════════════════════════
+  // Tab 2: 全局白名单
+  // ════════════════════════════════════════════════════
+
+  function renderWhitelistTable() {
+    table.render({
+      elem: '#whitelist-table',
+      url: '/api/v1/whitelist',
+      method: 'get',
+      parseData: function(res) {
+        return { code: res.code, msg: res.msg, count: res.count, data: res.data };
+      },
+      page: true,
+      limit: 20,
+      limits: [10, 20, 50, 100],
+      cols: [[
+        { field: 'extension_name', title: '扩展名', width: 220, sort: true },
+        { field: 'postgres_versions', title: 'PG 版本范围', minWidth: 200, templet: function(d) {
+          if (!d.postgres_versions || d.postgres_versions.length === 0) {
+            return '<span style="color:#999;">全部</span>';
+          }
+          return d.postgres_versions.map(function(v) {
+            return '<span class="layui-badge layui-bg-blue">' + v + '</span>';
+          }).join(' ');
+        }},
+        { field: 'arch', title: '架构', width: 200, templet: function(d) {
+          if (!d.arch || d.arch.length === 0) {
+            return '<span style="color:#999;">全部</span>';
+          }
+          return d.arch.map(function(a) {
+            return '<span class="layui-badge layui-bg-green">' + a + '</span>';
+          }).join(' ');
+        }},
+        { field: 'created_at', title: '创建时间', width: 180, templet: function(d) {
+          return d.created_at ? d.created_at.replace('T', ' ').substring(0, 19) : '-';
+        }},
+        { title: '操作', width: 100, toolbar: '#whitelist-row-ops', fixed: 'right' }
+      ]],
+      skin: 'row',
+      even: true
+    });
+  }
+
+  // 白名单表单
+  function buildWhitelistForm() {
+    var html = '<form class="layui-form" style="padding:20px;" lay-filter="whitelist-form">';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">扩展名</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="extension_name" required lay-verify="required" placeholder="如：postgis" class="layui-input">';
+    html += '</div></div>';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">PG 版本范围</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="postgres_versions" placeholder="留空=全部，多个用逗号分隔，如：>=16.0,15.4" class="layui-input">';
+    html += '<div style="font-size:12px;color:#999;margin-top:5px;">支持版本约束表达式，留空表示适用所有 PG 版本</div>';
+    html += '</div></div>';
+    html += '<div class="layui-form-item">';
+    html += '<label class="layui-form-label">架构</label>';
+    html += '<div class="layui-input-block">';
+    html += '<input type="text" name="arch" placeholder="留空=全部，多个用逗号分隔，如：x86_64,aarch64" class="layui-input">';
+    html += '<div style="font-size:12px;color:#999;margin-top:5px;">留空表示适用所有架构</div>';
+    html += '</div></div>';
+    html += '</form>';
+    return html;
+  }
+
+  // 添加白名单条目
+  document.getElementById('btn-add-whitelist').onclick = function() {
+    layer.open({
+      title: '添加白名单条目',
+      content: buildWhitelistForm(),
+      area: ['550px', '380px'],
+      btn: ['保存', '取消'],
+      success: function() { form.render(); },
+      yes: function(index) {
+        var data = form.val('whitelist-form');
+        var body = { extension_name: data.extension_name };
+        if (data.postgres_versions) {
+          body.postgres_versions = data.postgres_versions.split(',')
+            .map(function(s) { return s.trim(); })
+            .filter(function(s) { return s; });
+        }
+        if (data.arch) {
+          body.arch = data.arch.split(',')
+            .map(function(s) { return s.trim(); })
+            .filter(function(s) { return s; });
+        }
+        apiFetch('/api/v1/whitelist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).then(r => r.json()).then(res => {
+          if (res.code === 0) {
+            layer.close(index);
+            layer.msg('添加成功', { icon: 1 });
+            table.reload('whitelist-table');
+          } else {
+            layer.msg(res.msg || '添加失败', { icon: 2 });
+          }
+        });
+      }
+    });
+  };
+
+  // 白名单搜索
+  document.getElementById('btn-search-whitelist').onclick = function() {
+    var keyword = document.getElementById('search-keyword').value;
+    table.reload('whitelist-table', {
+      where: { keyword: keyword },
+      page: { curr: 1 }
+    });
+  };
+
+  document.getElementById('search-keyword').onkeyup = function(e) {
+    if (e.key === 'Enter') {
+      document.getElementById('btn-search-whitelist').click();
+    }
+  };
+
+  document.getElementById('btn-reset-whitelist').onclick = function() {
+    document.getElementById('search-keyword').value = '';
+    table.reload('whitelist-table', {
+      where: { keyword: '' },
+      page: { curr: 1 }
+    });
+  };
+
+  // 白名单行操作
+  table.on('tool(whitelist-table)', function(obj) {
+    var data = obj.data;
+    if (obj.event === 'delete') {
+      layer.confirm('确定删除白名单条目 "' + data.extension_name + '"？', function(index) {
+        apiFetch('/api/v1/whitelist/' + data.id, { method: 'DELETE' })
+          .then(r => r.json())
+          .then(res => {
+            if (res.code === 0) {
+              layer.msg('删除成功', { icon: 1 });
+              table.reload('whitelist-table');
+            } else {
+              layer.msg(res.msg || '删除失败', { icon: 2 });
+            }
+          });
+        layer.close(index);
+      });
+    }
+  });
+
+  // ════════════════════════════════════════════════════
+  // Tab 3: 同步任务
+  // ════════════════════════════════════════════════════
+
+  function renderSyncTasksTable() {
+    table.render({
+      elem: '#sync-tasks-table',
+      url: '/api/v1/sync/tasks',
+      method: 'get',
+      parseData: function(res) {
+        return { code: res.code, msg: res.msg, count: res.count, data: res.data };
+      },
+      page: true,
+      limit: 20,
+      cols: [[
+        { field: 'source_name', title: '仓库源', width: 150 },
+        { field: 'status', title: '状态', width: 100, templet: function(d) { return statusHtml(d.status); }},
+        { field: 'total', title: '总包数', width: 90, sort: true },
+        { field: 'downloaded', title: '已下载', width: 90 },
+        { field: 'failed', title: '失败', width: 80 },
+        { field: 'skipped', title: '跳过', width: 80 },
+        { field: 'started_at', title: '开始时间', width: 180, templet: function(d) {
+          return d.started_at ? d.started_at.replace('T', ' ').substring(0, 19) : '-';
+        }},
+        { title: '操作', width: 120, toolbar: '#task-ops', fixed: 'right' }
+      ]],
+      skin: 'row',
+      even: true
+    });
+  }
 
   // 触发同步
   document.getElementById('btn-trigger-sync').onclick = function() {
@@ -104,7 +509,7 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
         return;
       }
       var sources = res.data;
-      var html = '<form class="layui-form" style="padding:20px;">';
+      var html = '<form class="layui-form" style="padding:20px;" lay-filter="sync-trigger-form">';
       html += '<div class="layui-form-item"><label class="layui-form-label">仓库源</label><div class="layui-input-block">';
       html += '<select name="source_id">';
       sources.forEach(function(s) { html += '<option value="' + s.id + '">' + s.name + '</option>'; });
@@ -112,14 +517,14 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
       html += '<div class="layui-form-item"><label class="layui-form-label">模拟运行</label><div class="layui-input-block">';
       html += '<input type="checkbox" name="dry_run" lay-skin="switch" lay-text="是|否"></div></div>';
       html += '</form>';
-      layer.open({ 
-        title: '触发同步', 
-        content: html, 
-        area: ['500px', '300px'], 
+      layer.open({
+        title: '触发同步',
+        content: html,
+        area: ['500px', '300px'],
         btn: ['开始同步', '取消'],
         success: function() { form.render(); },
         yes: function(index) {
-          var data = form.val('layui-form');
+          var data = form.val('sync-trigger-form');
           apiFetch('/api/v1/sync/trigger', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -172,8 +577,11 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
     }
   });
 
-  // ─── 同步策略表格 ──────────────────────────────────
-  function loadPolicies() {
+  // ════════════════════════════════════════════════════
+  // Tab 4: 同步策略
+  // ════════════════════════════════════════════════════
+
+  function renderSyncPoliciesTable() {
     table.render({
       elem: '#sync-policies-table',
       url: '/api/v1/sync/policies',
@@ -197,7 +605,6 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
       even: true
     });
   }
-  loadPolicies();
 
   // 辅助：checkbox 选中值收集
   function checkedVals(name) {
@@ -420,7 +827,6 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
         layer.close(index);
       });
     } else if (obj.event === 'toggle') {
-      // 快速启用/禁用
       apiFetch('/api/v1/sync/policies/' + data.id, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -435,7 +841,34 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
       });
     }
   });
+
+  // ─── Tab 切换懒加载 ────────────────────────────────
+  element.on('tab(sync-tab)', function(data) {
+    var idx = data.index;
+    if (idx === 1 && !tabLoaded.whitelist) {
+      renderWhitelistTable();
+      tabLoaded.whitelist = true;
+    }
+    if (idx === 2 && !tabLoaded.tasks) {
+      renderSyncTasksTable();
+      tabLoaded.tasks = true;
+    }
+    if (idx === 3 && !tabLoaded.policies) {
+      renderSyncPoliciesTable();
+      tabLoaded.policies = true;
+    }
+  });
 });
+</script>
+
+<script type="text/html" id="source-row-ops">
+  <button class="layui-btn layui-btn-xs" lay-event="edit">编辑</button>
+  <button class="layui-btn layui-btn-xs layui-btn-normal" lay-event="sync">同步</button>
+  <button class="layui-btn layui-btn-xs layui-btn-danger" lay-event="delete">删除</button>
+</script>
+
+<script type="text/html" id="whitelist-row-ops">
+  <button class="layui-btn layui-btn-xs layui-btn-danger" lay-event="delete">删除</button>
 </script>
 
 <script type="text/html" id="task-ops">
