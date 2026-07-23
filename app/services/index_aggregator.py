@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """多源 index.json 聚合服务。
 
 当系统配置了多个仓库源时，将所有源的 index.json 合并为一个统一的索引文件。
@@ -13,7 +14,7 @@ StackGres 集群只需指向 SG-ERM，即可访问所有源中的扩展。
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +23,12 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session_factory
+from app.logging_config import get_task_logger
 from app.models import RepositorySource
 from app.services.naming import INDEX_PATH, get_index_url
 
 logger = logging.getLogger(__name__)
+task_logger = get_task_logger()
 
 
 async def aggregate_indices() -> dict:
@@ -47,6 +50,8 @@ async def aggregate_indices() -> dict:
         logger.warning("没有启用的仓库源")
         return {"publishers": [], "extensions": []}
 
+    task_logger.info(f"[索引聚合] 开始从 {len(sources)} 个仓库源获取 index.json")
+
     # 并发获取所有源的 index.json
     tasks = [_fetch_source_index(src) for src in sources]
     results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -55,13 +60,15 @@ async def aggregate_indices() -> dict:
     merged = {
         "publishers": [],
         "extensions": [],
-        "aggregatedAt": datetime.utcnow().isoformat(),
+        "aggregatedAt": datetime.now(timezone.utc).isoformat(),
         "sources": [],
     }
 
     for source, index_data in zip(sources, results):
         if isinstance(index_data, Exception):
-            logger.warning(f"获取源 {source.name} 的 index.json 失败: {index_data}")
+            task_logger.error(
+                f"[索引聚合] 获取源 {source.name} 的 index.json 失败: {index_data}"
+            )
             merged["sources"].append({
                 "id": source.id,
                 "name": source.name,
@@ -80,8 +87,8 @@ async def aggregate_indices() -> dict:
 
         _merge_into(merged, index_data, source)
 
-    logger.info(
-        f"索引聚合完成: {len(sources)} 个源, "
+    task_logger.info(
+        f"[索引聚合] 完成: {len(sources)} 个源, "
         f"{len(merged['extensions'])} 个扩展, "
         f"{len(merged['publishers'])} 个发布者"
     )
@@ -277,10 +284,10 @@ async def build_aggregated_index() -> Path | None:
             lambda: _write_json(index_path, aggregated),
         )
 
-        logger.info(f"聚合 index.json 已写入: {index_path}")
+        task_logger.info(f"[索引聚合] 已写入: {index_path}")
         return index_path
     except Exception as e:
-        logger.error(f"索引聚合失败: {e}")
+        task_logger.error(f"[索引聚合] 失败: {e}", exc_info=True)
         return None
 
 

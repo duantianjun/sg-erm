@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """自定义扩展发布服务。
 
 处理完整的发布流程：
@@ -10,6 +11,7 @@
 7. 创建/更新数据库记录
 """
 import json
+import logging
 import os
 import shutil
 import tarfile
@@ -27,6 +29,8 @@ from app.services.crypto_service import (
     sign_sha256_file,
 )
 from app.services.naming import get_local_path, get_package_name
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_dir(path: Path) -> None:
@@ -49,9 +53,12 @@ def validate_tgz(tgz_path: str) -> tuple[bool, str]:
             names = tf.getnames()
             control_files = [n for n in names if n.endswith(".control")]
             if not control_files:
+                logger.warning(f"[发布服务] 校验失败：未找到 .control 文件 tgz={tgz_path}")
                 return False, "扩展包中未找到 .control 文件"
+            logger.debug(f"[发布服务] tgz 校验通过 tgz={tgz_path} control_files={len(control_files)}")
             return True, ""
     except tarfile.TarError as e:
+        logger.warning(f"[发布服务] 校验失败：无效的 tar.gz 文件 tgz={tgz_path}: {e}")
         return False, f"无效的 tar.gz 文件: {e}"
 
 
@@ -160,6 +167,11 @@ def update_local_index(
     with open(index_path, "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2, ensure_ascii=False)
 
+    logger.info(
+        f"[发布服务] index.json 更新完成 ext={ext_name} version={version} "
+        f"publisher={publisher_name} arch={arch} os={os_name} pg={pg_version}"
+    )
+
 
 async def publish_extension(
     session: AsyncSession,
@@ -210,9 +222,15 @@ async def publish_extension(
     repo_dir = settings.repo_dir
     password = get_system_password()
 
+    logger.info(
+        f"[发布服务] 开始发布 ext={ext_name} version={version} "
+        f"publisher_id={publisher_id} flavor={flavor} pg={pg_version} arch={arch} os={os_name}"
+    )
+
     # 1. 校验 .tgz
     valid, error = validate_tgz(tgz_path)
     if not valid:
+        logger.warning(f"[发布服务] 发布中止：tgz 校验失败 ext={ext_name} version={version}: {error}")
         return {"success": False, "package_path": "", "error": error}
 
     # 2. 获取发布者信息
@@ -221,26 +239,33 @@ async def publish_extension(
     )
     publisher = result.scalar_one_or_none()
     if not publisher:
+        logger.warning(f"[发布服务] 发布中止：发布者不存在 publisher_id={publisher_id}")
         return {"success": False, "package_path": "", "error": "发布者不存在"}
 
     if not publisher.private_key:
+        logger.warning(f"[发布服务] 发布中止：发布者无私钥 publisher={publisher.name}")
         return {"success": False, "package_path": "", "error": "发布者没有私钥"}
 
     # 解密私钥
     try:
         private_key_pem = decrypt_private_key(publisher.private_key, password)
+        logger.debug(f"[发布服务] 私钥解密成功 publisher={publisher.name}")
     except Exception as e:
+        logger.error(f"[发布服务] 私钥解密失败 publisher={publisher.name}: {e}")
         return {"success": False, "package_path": "", "error": f"私钥解密失败: {e}"}
 
     # 3. 构建包名和路径
     package_name = get_package_name(ext_name, version, flavor, pg_version, build_num)
     rel_path = get_local_path(publisher.name, arch, os_name, package_name)
     dest_path = repo_dir / rel_path
+    logger.debug(f"[发布服务] 包路径规划 package_name={package_name} rel_path={rel_path}")
 
     # 4. 签名 → 生成 .sha256
     try:
         sha256_b64 = sign_sha256_file(private_key_pem, tgz_path)
+        logger.debug(f"[发布服务] 签名完成 tgz={tgz_path}")
     except Exception as e:
+        logger.error(f"[发布服务] 签名失败 ext={ext_name} version={version}: {e}")
         return {"success": False, "package_path": "", "error": f"签名失败: {e}"}
 
     # 5. 在临时目录中创建 .sha256 文件
@@ -253,9 +278,11 @@ async def publish_extension(
     try:
         # 6. 打包 .tar
         build_tar_package(tgz_path, sha256_path, str(dest_path))
+        logger.debug(f"[发布服务] tar 包已构建 path={dest_path}")
 
         # 7. 计算包大小
         package_size = dest_path.stat().st_size
+        logger.debug(f"[发布服务] 包大小 size={package_size} bytes")
 
         # 8. 更新 index.json
         update_local_index(
@@ -290,6 +317,9 @@ async def publish_extension(
             )
             session.add(ext)
             await session.flush()  # 获取 ext.id
+            logger.debug(f"[发布服务] 新建 Extension 记录 ext={ext_name} id={ext.id}")
+        else:
+            logger.debug(f"[发布服务] 复用 Extension 记录 ext={ext_name} id={ext.id}")
 
         # 查找或创建 ExtensionVersion
         ver_result = await session.execute(
@@ -307,6 +337,9 @@ async def publish_extension(
             )
             session.add(ver)
             await session.flush()
+            logger.debug(f"[发布服务] 新建 ExtensionVersion ext={ext_name} version={version} id={ver.id}")
+        else:
+            logger.debug(f"[发布服务] 复用 ExtensionVersion ext={ext_name} version={version} id={ver.id}")
 
         # 查找或创建 ExtensionBuild
         build_result = await session.execute(
@@ -333,14 +366,21 @@ async def publish_extension(
                 verified=True,
             )
             session.add(build)
+            logger.debug(f"[发布服务] 新建 ExtensionBuild ext={ext_name} version={version} arch={arch} os={os_name}")
         else:
             # 更新现有构建
             build.package_path = rel_path
             build.package_size = package_size
             build.cached = True
             build.verified = True
+            logger.debug(f"[发布服务] 更新 ExtensionBuild ext={ext_name} version={version} arch={arch} os={os_name}")
 
         await session.commit()
+
+        logger.info(
+            f"[发布服务] 发布成功 ext={ext_name} version={version} "
+            f"publisher={publisher.name} package={package_name} size={package_size}"
+        )
 
         return {
             "success": True,
@@ -348,10 +388,15 @@ async def publish_extension(
             "error": "",
         }
 
+    except Exception as e:
+        logger.exception(f"[发布服务] 发布过程异常 ext={ext_name} version={version}: {e}")
+        return {"success": False, "package_path": "", "error": str(e)}
+
     finally:
         # 清理临时 .sha256 文件
         if os.path.exists(sha256_path):
             os.unlink(sha256_path)
+            logger.debug(f"[发布服务] 清理临时 .sha256 文件 path={sha256_path}")
 
 
 async def create_custom_publisher(
@@ -366,6 +411,8 @@ async def create_custom_publisher(
     """
     from app.services.crypto_service import encrypt_private_key, generate_key_pair
 
+    logger.info(f"[发布服务] 创建自定义发布者 name={name}")
+
     private_pem, public_pem = generate_key_pair()
     encrypted_private = encrypt_private_key(private_pem, get_system_password())
 
@@ -379,4 +426,6 @@ async def create_custom_publisher(
     session.add(publisher)
     await session.commit()
     await session.refresh(publisher)
+
+    logger.info(f"[发布服务] 自定义发布者创建成功 name={name} id={publisher.id}")
     return publisher

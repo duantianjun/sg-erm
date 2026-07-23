@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """layui 兼容响应格式。
 
 layui table 组件期望的 JSON 格式:

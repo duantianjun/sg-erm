@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """模型公共基类与 Mixin。"""
 import uuid
 from datetime import datetime

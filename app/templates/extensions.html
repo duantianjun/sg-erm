@@ -1,107 +1,813 @@
 {% extends "base.html" %}
 
-{% block title %}扩展目录{% endblock %}
+{% block title %}扩展管理{% endblock %}
 
 {% block content %}
-<div class="page-title">扩展目录</div>
+<div class="page-title">扩展管理</div>
 
-<!-- 搜索栏 -->
-<div class="sg-card" style="margin-bottom:15px;">
-  <div class="layui-form layui-form-pane">
-    <div class="layui-form-item" style="margin-bottom:0;">
-      <div class="layui-inline">
-        <div class="layui-input-inline" style="width:200px;">
-          <input type="text" id="search-keyword" placeholder="搜索扩展名或描述" class="layui-input">
+<div class="layui-tab layui-tab-brief" lay-filter="ext-tab">
+  <ul class="layui-tab-title">
+    <li class="layui-this">扩展目录</li>
+    <li>仓库文件</li>
+    <li>自定义发布</li>
+  </ul>
+  <div class="layui-tab-content">
+
+    <!-- ═══════════════ Tab 1: 扩展目录 ═══════════════ -->
+    <div class="layui-tab-item layui-show">
+      <!-- 搜索 + 批量操作栏 -->
+      <div class="sg-card" style="margin-bottom:15px;">
+        <div class="layui-form layui-form-pane">
+          <div class="layui-form-item" style="margin-bottom:0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div class="layui-input-inline" style="width:200px;">
+              <input type="text" id="ext-search-keyword" placeholder="搜索扩展名或描述" class="layui-input">
+            </div>
+            <button class="layui-btn" id="ext-btn-search">搜索</button>
+            <button class="layui-btn layui-btn-primary" id="ext-btn-reset">重置</button>
+            <button class="layui-btn layui-btn-danger" id="ext-btn-batch-del" style="margin-left:auto;">
+              <i class="layui-icon layui-icon-delete"></i> 批量删除
+            </button>
+          </div>
         </div>
-        <button class="layui-btn" id="btn-search">搜索</button>
-        <button class="layui-btn layui-btn-primary" id="btn-reset">重置</button>
+      </div>
+      <table id="ext-table" lay-filter="ext-table"></table>
+    </div>
+
+    <!-- ═══════════════ Tab 2: 仓库文件 ═══════════════ -->
+    <div class="layui-tab-item">
+      <!-- 顶部工具栏 -->
+      <div class="sg-card" style="margin-bottom:15px;padding:12px 20px;">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <div class="layui-btn-group">
+            <button class="layui-btn layui-btn-sm" id="rf-btn-view-flat">扁平视图</button>
+            <button class="layui-btn layui-btn-sm layui-btn-primary" id="rf-btn-view-tree">树形视图</button>
+          </div>
+          <button class="layui-btn layui-btn-sm layui-btn-warm" id="rf-btn-consistency">
+            <i class="layui-icon layui-icon-fonts-code"></i> 一致性检查
+          </button>
+          <button class="layui-btn layui-btn-sm" id="rf-btn-refresh">
+            <i class="layui-icon layui-icon-refresh"></i> 刷新
+          </button>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+            <div class="layui-input-inline" style="width:200px;">
+              <input type="text" id="rf-search-keyword" placeholder="搜索包名/扩展名" class="layui-input">
+            </div>
+            <button class="layui-btn layui-btn-sm" id="rf-btn-search">搜索</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 左右分栏 -->
+      <div style="display:flex;gap:15px;align-items:flex-start;">
+        <div id="rf-tree-panel" class="sg-card" style="width:30%;min-width:200px;display:none;padding:12px;">
+          <div style="font-weight:600;margin-bottom:10px;color:#333;">
+            <i class="layui-icon layui-icon-list"></i> 目录结构
+          </div>
+          <div id="rf-tree" style="font-size:13px;"></div>
+        </div>
+        <div style="flex:1;min-width:0;">
+          <div id="rf-breadcrumb" class="sg-card" style="display:none;margin-bottom:10px;padding:8px 15px;font-size:13px;color:#666;">
+            <i class="layui-icon layui-icon-location"></i>
+            <span>当前路径：</span>
+            <span id="rf-breadcrumb-text" style="color:#1e9fff;font-weight:600;">全部</span>
+          </div>
+          <table id="rf-table" lay-filter="rf-table"></table>
+        </div>
       </div>
     </div>
+
+    <!-- ═══════════════ Tab 3: 自定义发布 ═══════════════ -->
+    <div class="layui-tab-item">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">
+        <span style="font-size:15px;font-weight:600;">自定义扩展发布</span>
+        <button class="layui-btn layui-btn-normal" id="pub-btn-create-publisher">
+          <i class="layui-icon layui-icon-add-1"></i> 创建发布者
+        </button>
+      </div>
+
+      <!-- 发布表单 -->
+      <div class="sg-card" style="margin-bottom:20px;">
+        <div style="font-size:15px;font-weight:600;margin-bottom:16px;">发布新扩展</div>
+        <form class="layui-form" id="pub-form" enctype="multipart/form-data">
+          <div class="layui-form-item">
+            <div class="layui-inline">
+              <label class="layui-form-label">发布者</label>
+              <div class="layui-input-inline" style="width:200px;">
+                <select name="publisher_id" id="pub-publisher-select" lay-verify="required" lay-search>
+                  <option value="">选择发布者</option>
+                </select>
+              </div>
+            </div>
+            <div class="layui-inline">
+              <label class="layui-form-label">扩展名称</label>
+              <div class="layui-input-inline" style="width:200px;">
+                <input type="text" name="ext_name" required lay-verify="required" placeholder="如 myext" class="layui-input">
+              </div>
+            </div>
+          </div>
+          <div class="layui-form-item">
+            <div class="layui-inline">
+              <label class="layui-form-label">版本号</label>
+              <div class="layui-input-inline" style="width:150px;">
+                <input type="text" name="version" required lay-verify="required" placeholder="如 1.0" class="layui-input" value="1.0">
+              </div>
+            </div>
+            <div class="layui-inline">
+              <label class="layui-form-label">PG 版本</label>
+              <div class="layui-input-inline" style="width:150px;">
+                <input type="text" name="pg_version" required lay-verify="required" placeholder="如 16.4" class="layui-input" value="16.4">
+              </div>
+            </div>
+            <div class="layui-inline">
+              <label class="layui-form-label">风味</label>
+              <div class="layui-input-inline" style="width:100px;">
+                <select name="flavor">
+                  <option value="pg" selected>pg</option>
+                  <option value="bf">bf</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="layui-form-item">
+            <div class="layui-inline">
+              <label class="layui-form-label">架构</label>
+              <div class="layui-input-inline" style="width:150px;">
+                <select name="arch">
+                  <option value="x86_64" selected>x86_64</option>
+                  <option value="aarch64">aarch64</option>
+                </select>
+              </div>
+            </div>
+            <div class="layui-inline">
+              <label class="layui-form-label">操作系统</label>
+              <div class="layui-input-inline" style="width:120px;">
+                <select name="os_name">
+                  <option value="linux" selected>linux</option>
+                </select>
+              </div>
+            </div>
+            <div class="layui-inline">
+              <label class="layui-form-label">通道</label>
+              <div class="layui-input-inline" style="width:120px;">
+                <select name="channel">
+                  <option value="stable" selected>stable</option>
+                  <option value="beta">beta</option>
+                  <option value="dev">dev</option>
+                </select>
+              </div>
+            </div>
+          </div>
+          <div class="layui-form-item">
+            <label class="layui-form-label">扩展包 (.tgz)</label>
+            <div class="layui-input-block">
+              <input type="file" name="tgz_file" accept=".tgz" required lay-verify="required" class="layui-input" style="padding:4px;">
+              <div style="font-size:12px;color:#999;margin-top:5px;">必须包含 .control 文件。包内结构: myext--1.0/ 目录下包含 .control 和 .so 文件。</div>
+            </div>
+          </div>
+          <div class="layui-form-item">
+            <label class="layui-form-label">描述</label>
+            <div class="layui-input-block">
+              <textarea name="description" placeholder="扩展功能描述" class="layui-textarea"></textarea>
+            </div>
+          </div>
+          <div class="layui-form-item">
+            <div class="layui-inline">
+              <label class="layui-form-label">许可证</label>
+              <div class="layui-input-inline" style="width:200px;">
+                <input type="text" name="license_str" placeholder="如 Apache-2.0" class="layui-input">
+              </div>
+            </div>
+            <div class="layui-inline">
+              <label class="layui-form-label">标签</label>
+              <div class="layui-input-inline" style="width:200px;">
+                <input type="text" name="tags" placeholder="逗号分隔" class="layui-input">
+              </div>
+            </div>
+          </div>
+          <div class="layui-form-item">
+            <div class="layui-input-block">
+              <button class="layui-btn" type="submit" id="pub-btn-submit">发布扩展</button>
+              <button type="reset" class="layui-btn layui-btn-primary">重置</button>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- 已发布扩展列表 -->
+      <div class="sg-card">
+        <div style="font-size:15px;font-weight:600;margin-bottom:16px;">已发布扩展</div>
+        <table id="pub-table" lay-filter="pub-table"></table>
+      </div>
+    </div>
+
   </div>
 </div>
 
-<!-- 扩展列表 -->
-<table id="extensions-table" lay-filter="extensions-table"></table>
+<!-- ═══════════════ 公共模板 ═══════════════ -->
 
-<!-- 操作列模板 -->
-<script type="text/html" id="is-custom-tpl">
+<!-- 扩展类型标签 -->
+<script type="text/html" id="ext-is-custom-tpl">
   {% raw %}{{# if(d.is_custom){ }}{% endraw %} <span class="layui-badge layui-badge-orange">自定义</span> {% raw %}{{# } else { }}{% endraw %} <span class="layui-badge layui-bg-blue">官方</span> {% raw %}{{# } }}{% endraw %}
+</script>
+
+<!-- 缓存构建数 -->
+<script type="text/html" id="ext-cached-tpl">
+  {% raw %}{{# if(d.cached_build_count > 0){ }}{% endraw %}
+    <span style="color:#5fb878;">{% raw %}{{ d.cached_build_count }}{% endraw %}</span>/{% raw %}{{ d.build_count }}{% endraw %}
+  {% raw %}{{# } else { }}{% endraw %}
+    <span style="color:#999;">0</span>/{% raw %}{{ d.build_count }}{% endraw %}
+  {% raw %}{{# } }}{% endraw %}
+</script>
+
+<!-- 扩展目录行操作 -->
+<script type="text/html" id="ext-row-ops">
+  <button class="layui-btn layui-btn-xs" lay-event="detail">详情</button>
+  <button class="layui-btn layui-btn-xs layui-btn-danger" lay-event="delete">删除</button>
+</script>
+
+<!-- 仓库文件缓存状态 -->
+<script type="text/html" id="rf-cached-tpl">
+  {% raw %}{{# if(d.file_exists){ }}{% endraw %}
+    <span style="color:#5fb878;font-weight:600;">已缓存</span>
+  {% raw %}{{# } else { }}{% endraw %}
+    <span style="color:#ff5722;font-weight:600;">文件缺失</span>
+  {% raw %}{{# } }}{% endraw %}
+</script>
+
+<!-- 仓库文件验证结果 -->
+<script type="text/html" id="rf-verify-tpl">
+  {% raw %}{{# if(d.verify_result === 'match'){ }}{% endraw %}
+    <span style="color:#5fb878;font-weight:600;">匹配</span>
+  {% raw %}{{# } else if(d.verify_result === 'mismatch'){ }}{% endraw %}
+    <span style="color:#ff5722;font-weight:600;">不匹配</span>
+  {% raw %}{{# } else { }}{% endraw %}
+    <span style="color:#999;">-</span>
+  {% raw %}{{# } }}{% endraw %}
+</script>
+
+<!-- 仓库文件行操作 -->
+<script type="text/html" id="rf-row-ops">
+  <button class="layui-btn layui-btn-xs" lay-event="verify">验证</button>
+  <button class="layui-btn layui-btn-xs layui-btn-normal" lay-event="redownload">{% raw %}{{# if(d._downloading){ }}{% endraw %}<i class="layui-icon layui-icon-loading-1"></i> 下载中{% raw %}{{# } else { }}{% endraw %}重下载{% raw %}{{# } }}{% endraw %}</button>
+  <button class="layui-btn layui-btn-xs layui-btn-danger" lay-event="delete">删除</button>
+</script>
+
+<!-- 自定义发布行操作 -->
+<script type="text/html" id="pub-row-ops">
+  <button class="layui-btn layui-btn-xs" lay-event="detail">详情</button>
 </script>
 
 {% endblock %}
 
 {% block extra_script %}
 <script>
-layui.use(['table'], function(){
+layui.use(['table', 'layer', 'form', 'tree', 'element'], function(){
   var table = layui.table;
+  var layer = layui.layer;
+  var form = layui.form;
+  var tree = layui.tree;
+  var element = layui.element;
 
-  // 渲染表格
-  table.render({
-    elem: '#extensions-table',
-    url: '/api/v1/extensions',
-    method: 'get',
-    where: { page: 1, limit: 20 },
-    parseData: function(res) {
-      return {
-        code: res.code,
-        msg: res.msg,
-        count: res.count,
-        data: res.data
-      };
-    },
-    page: true,
-    limit: 20,
-    limits: [10, 20, 50, 100],
-    cols: [[
-      { field: 'name', title: '扩展名', width: 180, sort: true },
-      { field: 'description', title: '描述', minWidth: 300 },
-      { field: 'publisher', title: '发布者', width: 120 },
-      { field: 'license', title: '许可证', width: 100 },
-      { field: 'version_count', title: '版本数', width: 90, sort: true },
-      { field: 'build_count', title: '构建数', width: 90, sort: true },
-      { field: 'is_custom', title: '类型', width: 90, templet: '#is-custom-tpl' },
-      { title: '操作', width: 100, toolbar: '#row-ops', fixed: 'right' }
-    ]],
-    skin: 'row',
-    even: true
-  });
+  // 文件大小格式化
+  function formatSize(bytes) {
+    if (!bytes || bytes <= 0) return '-';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+  }
 
-  // 搜索
-  document.getElementById('btn-search').onclick = function() {
-    var keyword = document.getElementById('search-keyword').value;
-    table.reload('extensions-table', {
-      where: { keyword: keyword, page: 1 },
+  // Tab 加载状态
+  var tabLoaded = { ext: false, rf: false, pub: false };
+
+  // ═══════════════ Tab 1: 扩展目录 ═══════════════
+
+  function initExtTable() {
+    table.render({
+      elem: '#ext-table',
+      url: '/api/v1/extensions',
+      method: 'get',
+      parseData: function(res) {
+        return { code: res.code, msg: res.msg, count: res.count, data: res.data };
+      },
+      page: true,
+      limit: 20,
+      limits: [10, 20, 50, 100],
+      cols: [[
+        { type: 'checkbox', fixed: 'left' },
+        { field: 'name', title: '扩展名', width: 180, sort: true },
+        { field: 'publisher', title: '发布者', width: 120 },
+        { field: 'version_count', title: '版本数', width: 90, sort: true },
+        { field: 'build_count', title: '构建数', width: 90, sort: true },
+        { field: 'cached_build_count', title: '缓存构建', width: 100, templet: '#ext-cached-tpl' },
+        { field: 'total_size', title: '磁盘大小', width: 100, templet: function(d) { return formatSize(d.total_size); } },
+        { field: 'is_custom', title: '类型', width: 90, templet: '#ext-is-custom-tpl' },
+        { field: 'description', title: '描述', minWidth: 300 },
+        { field: 'license', title: '许可证', width: 100 },
+        { title: '操作', width: 140, toolbar: '#ext-row-ops', fixed: 'right' }
+      ]],
+      skin: 'row',
+      even: true
+    });
+  }
+
+  function reloadExt() {
+    table.reload('ext-table', {
+      where: { keyword: document.getElementById('ext-search-keyword').value },
       page: { curr: 1 }
     });
+  }
+
+  document.getElementById('ext-btn-search').onclick = reloadExt;
+  document.getElementById('ext-search-keyword').onkeyup = function(e) {
+    if (e.key === 'Enter') reloadExt();
+  };
+  document.getElementById('ext-btn-reset').onclick = function() {
+    document.getElementById('ext-search-keyword').value = '';
+    reloadExt();
   };
 
-  // 回车搜索
-  document.getElementById('search-keyword').onkeyup = function(e) {
-    if (e.key === 'Enter') {
-      document.getElementById('btn-search').click();
+  // 批量删除
+  document.getElementById('ext-btn-batch-del').onclick = function() {
+    var checkStatus = table.checkStatus('ext-table');
+    var data = checkStatus.data;
+    if (data.length === 0) {
+      layer.msg('请先选择要删除的扩展', { icon: 0 });
+      return;
     }
-  };
-
-  // 重置
-  document.getElementById('btn-reset').onclick = function() {
-    document.getElementById('search-keyword').value = '';
-    table.reload('extensions-table', {
-      where: { keyword: '', page: 1 },
-      page: { curr: 1 }
+    layer.confirm('确定删除选中的 ' + data.length + ' 个扩展？将同时删除磁盘文件和数据库记录，此操作不可恢复。', {
+      title: '确认批量删除'
+    }, function(index) {
+      layer.close(index);
+      var loadIdx = layer.load(2, { shade: [0.3, '#000'] });
+      var ids = data.map(function(d) { return d.id; });
+      apiFetch('/api/v1/extensions/batch', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: ids })
+      }).then(function(r) { return r.json(); }).then(function(res) {
+        layer.close(loadIdx);
+        if (res.code === 0) {
+          layer.msg(res.msg || '删除成功', { icon: 1 });
+          reloadExt();
+        } else {
+          layer.msg(res.msg || '删除失败', { icon: 2 });
+        }
+      }).catch(function(err) {
+        layer.close(loadIdx);
+        layer.msg('删除失败: ' + err.message, { icon: 2 });
+      });
     });
   };
 
-  // 行操作
-  table.on('tool(extensions-table)', function(obj) {
+  // 扩展行操作
+  table.on('tool(ext-table)', function(obj) {
     var data = obj.data;
     if (obj.event === 'detail') {
       window.location.href = '/extensions/' + encodeURIComponent(data.name);
+    } else if (obj.event === 'delete') {
+      layer.confirm('确定删除扩展 "' + data.name + '"？将删除所有版本、构建及磁盘文件。', {
+        title: '确认删除'
+      }, function(index) {
+        layer.close(index);
+        var loadIdx = layer.load(2, { shade: [0.3, '#000'] });
+        apiFetch('/api/v1/extensions/batch', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: [data.id] })
+        }).then(function(r) { return r.json(); }).then(function(res) {
+          layer.close(loadIdx);
+          if (res.code === 0) {
+            layer.msg('已删除扩展 ' + data.name, { icon: 1 });
+            reloadExt();
+          } else {
+            layer.msg(res.msg || '删除失败', { icon: 2 });
+          }
+        }).catch(function(err) {
+          layer.close(loadIdx);
+          layer.msg('删除失败: ' + err.message, { icon: 2 });
+        });
+      });
     }
   });
-});
-</script>
 
-<script type="text/html" id="row-ops">
-  <button class="layui-btn layui-btn-xs" lay-event="detail">详情</button>
+  // ═══════════════ Tab 2: 仓库文件 ═══════════════
+
+  var rfViewMode = 'flat';
+  var rfCurrentFilter = { publisher: '', arch: '', os: '', keyword: '' };
+
+  function initRfTable() {
+    table.render({
+      elem: '#rf-table',
+      url: '/api/v1/repo-files/packages',
+      method: 'get',
+      parseData: function(res) {
+        return { code: res.code, msg: res.msg, count: res.count, data: res.data };
+      },
+      page: true,
+      limit: 20,
+      limits: [10, 20, 50, 100],
+      cols: [[
+        { field: 'publisher', title: '发布者', width: 120 },
+        { field: 'arch', title: '架构', width: 90 },
+        { field: 'os', title: 'OS', width: 80 },
+        { field: 'package_name', title: '包名', width: 200 },
+        { field: 'extension_name', title: '扩展名', width: 120 },
+        { field: 'description', title: '描述', minWidth: 200 },
+        { field: 'license', title: '许可证', width: 100 },
+        { field: 'version', title: '版本', width: 80 },
+        { field: 'postgres_version', title: 'PG版本', width: 90 },
+        { field: 'package_size', title: '大小', width: 100, templet: function(d) { return formatSize(d.package_size); } },
+        { field: 'sha256', title: 'SHA256', width: 120, templet: function(d) {
+          if (!d.sha256) return '<span style="color:#999;">-</span>';
+          return '<span title="' + d.sha256 + '">' + d.sha256.substring(0, 12) + '</span>';
+        }},
+        { field: 'file_exists', title: '缓存状态', width: 90, templet: '#rf-cached-tpl' },
+        { field: 'verify_result', title: '验证', width: 80, templet: '#rf-verify-tpl' },
+        { title: '操作', width: 220, toolbar: '#rf-row-ops', fixed: 'right' }
+      ]],
+      skin: 'row',
+      even: true
+    });
+  }
+
+  function reloadRf() {
+    var where = {};
+    if (rfCurrentFilter.publisher) where.publisher = rfCurrentFilter.publisher;
+    if (rfCurrentFilter.arch) where.arch = rfCurrentFilter.arch;
+    if (rfCurrentFilter.os) where.os = rfCurrentFilter.os;
+    if (rfCurrentFilter.keyword) where.keyword = rfCurrentFilter.keyword;
+    table.reload('rf-table', { where: where, page: { curr: 1 } });
+  }
+
+  document.getElementById('rf-btn-search').onclick = function() {
+    rfCurrentFilter.keyword = document.getElementById('rf-search-keyword').value;
+    reloadRf();
+  };
+  document.getElementById('rf-search-keyword').onkeyup = function(e) {
+    if (e.key === 'Enter') document.getElementById('rf-btn-search').click();
+  };
+  document.getElementById('rf-btn-refresh').onclick = function() {
+    reloadRf();
+    if (rfViewMode === 'tree') rfLoadTree();
+  };
+  document.getElementById('rf-btn-view-flat').onclick = function() {
+    if (rfViewMode === 'flat') return;
+    rfViewMode = 'flat';
+    document.getElementById('rf-tree-panel').style.display = 'none';
+    document.getElementById('rf-breadcrumb').style.display = 'none';
+    this.classList.remove('layui-btn-primary');
+    document.getElementById('rf-btn-view-tree').classList.add('layui-btn-primary');
+    rfCurrentFilter.publisher = '';
+    rfCurrentFilter.arch = '';
+    rfCurrentFilter.os = '';
+    reloadRf();
+  };
+  document.getElementById('rf-btn-view-tree').onclick = function() {
+    if (rfViewMode === 'tree') return;
+    rfViewMode = 'tree';
+    document.getElementById('rf-tree-panel').style.display = '';
+    document.getElementById('rf-breadcrumb').style.display = '';
+    this.classList.remove('layui-btn-primary');
+    document.getElementById('rf-btn-view-flat').classList.add('layui-btn-primary');
+    rfLoadTree();
+  };
+
+  function rfLoadTree() {
+    apiFetch('/api/v1/repo-files/tree').then(function(r) { return r.json(); }).then(function(res) {
+      if (res.code !== 0) { layer.msg(res.msg || '加载目录树失败', { icon: 2 }); return; }
+      rfRenderTree(res.data || []);
+    }).catch(function(err) { layer.msg('加载目录树失败: ' + err.message, { icon: 2 }); });
+  }
+
+  function rfBuildTreeData(data) {
+    return data.map(function(p) {
+      var pCount = 0;
+      var pChildren = (p.children || []).map(function(a) {
+        var aCount = 0;
+        var aChildren = (a.children || []).map(function(o) {
+          var cnt = o.count || 0;
+          pCount += cnt; aCount += cnt;
+          return { title: o.os + ' (' + cnt + ')', filterData: { publisher: p.publisher, arch: a.arch, os: o.os } };
+        });
+        return { title: a.arch + ' (' + aCount + ')', children: aChildren, filterData: { publisher: p.publisher, arch: a.arch, os: '' } };
+      });
+      return { title: p.publisher + ' (' + pCount + ')', children: pChildren, filterData: { publisher: p.publisher, arch: '', os: '' } };
+    });
+  }
+
+  function rfRenderTree(data) {
+    tree.render({
+      elem: '#rf-tree',
+      data: rfBuildTreeData(data),
+      showLine: true,
+      onlyIconControl: true,
+      click: function(node) {
+        var fd = node.data.filterData || {};
+        rfCurrentFilter.publisher = fd.publisher || '';
+        rfCurrentFilter.arch = fd.arch || '';
+        rfCurrentFilter.os = fd.os || '';
+        var crumbs = [];
+        if (fd.publisher) crumbs.push(fd.publisher);
+        if (fd.arch) crumbs.push(fd.arch);
+        if (fd.os) crumbs.push(fd.os);
+        document.getElementById('rf-breadcrumb-text').textContent = crumbs.length ? crumbs.join(' / ') : '全部';
+        reloadRf();
+      }
+    });
+  }
+
+  // 仓库文件行操作
+  table.on('tool(rf-table)', function(obj) {
+    var data = obj.data;
+    if (obj.event === 'verify') { rfVerify(obj); }
+    else if (obj.event === 'redownload') { rfRedownload(obj); }
+    else if (obj.event === 'delete') { rfDelete(obj); }
+  });
+
+  function rfVerify(obj) {
+    apiFetch('/api/v1/repo-files/packages/' + obj.data.build_id + '/verify', { method: 'POST' })
+      .then(function(r) { return r.json(); }).then(function(res) {
+        if (res.code === 0) {
+          var d = res.data[0] || {};
+          var matched = d.matched;
+          obj.update({ verify_result: matched ? 'match' : 'mismatch', sha256: d.stored });
+          layer.msg(res.msg || (matched ? 'SHA256 匹配' : 'SHA256 不匹配'), { icon: matched ? 1 : 2 });
+        } else { layer.msg(res.msg || '验证失败', { icon: 2 }); }
+      }).catch(function(err) { layer.msg('验证失败: ' + err.message, { icon: 2 }); });
+  }
+
+  function rfRedownload(obj) {
+    var tr = obj.tr;
+    var btn = tr && tr.find('[lay-event="redownload"]');
+    if (btn) { btn.attr('disabled', 'disabled').html('<i class="layui-icon layui-icon-loading-1"></i> 下载中'); }
+    apiFetch('/api/v1/repo-files/packages/' + obj.data.build_id + '/redownload', { method: 'POST' })
+      .then(function(r) { return r.json(); }).then(function(res) {
+        if (btn) btn.removeAttr('disabled').html('重下载');
+        if (res.code === 0) { layer.msg('重新下载成功', { icon: 1 }); reloadRf(); }
+        else { layer.msg(res.msg || '重新下载失败', { icon: 2 }); }
+      }).catch(function(err) {
+        if (btn) btn.removeAttr('disabled').html('重下载');
+        layer.msg('重新下载失败: ' + err.message, { icon: 2 });
+      });
+  }
+
+  function rfDelete(obj) {
+    var displayName = obj.data.package_name || obj.data.package_path || obj.data.build_id;
+    layer.confirm('确定删除包 "' + displayName + '" 吗？将同时删除磁盘文件并清除缓存记录。', { title: '确认删除' }, function(index) {
+      apiFetch('/api/v1/repo-files/packages/' + obj.data.build_id, { method: 'DELETE' })
+        .then(function(r) { return r.json(); }).then(function(res) {
+          layer.close(index);
+          if (res.code === 0) {
+            layer.msg('已删除 ' + displayName + '，缓存已清除', { icon: 1 });
+            reloadRf();
+            if (rfViewMode === 'tree') rfLoadTree();
+          } else { layer.msg(res.msg || '删除失败', { icon: 2 }); }
+        }).catch(function(err) {
+          layer.close(index);
+          layer.msg('删除失败: ' + err.message, { icon: 2 });
+        });
+    });
+  }
+
+  // 一致性检查
+  document.getElementById('rf-btn-consistency').onclick = function() {
+    var loadingIndex = layer.load(2, { shade: [0.3, '#000'] });
+    apiFetch('/api/v1/repo-files/consistency-check', { method: 'POST' })
+      .then(function(r) { return r.json(); }).then(function(res) {
+        layer.close(loadingIndex);
+        if (res.code !== 0) { layer.msg(res.msg || '一致性检查失败', { icon: 2 }); return; }
+        var result = (res.data && res.data[0]) || { missing_files: [], orphan_files: [] };
+        rfShowConsistency(result);
+      }).catch(function(err) {
+        layer.close(loadingIndex);
+        layer.msg('一致性检查失败: ' + err.message, { icon: 2 });
+      });
+  };
+
+  window._selectAllMissing = function(el) {
+    document.querySelectorAll('input[name="missing-ck"]').forEach(function(cb) { cb.checked = el.checked; });
+    form.render('checkbox');
+  };
+  window._selectAllOrphan = function(el) {
+    document.querySelectorAll('input[name="orphan-ck"]').forEach(function(cb) { cb.checked = el.checked; });
+    form.render('checkbox');
+  };
+
+  function rfShowConsistency(result) {
+    var missing = result.missing_files || [];
+    var orphan = result.orphan_files || [];
+    var html = '<div style="padding:15px;">';
+    html += '<div style="margin-bottom:15px;color:#666;font-size:13px;">' +
+            '数据库有记录但文件缺失: <b style="color:#ff5722;">' + missing.length + '</b> 个 &nbsp;|&nbsp; ' +
+            '磁盘有文件但数据库无记录: <b style="color:#ffb800;">' + orphan.length + '</b> 个' +
+            '</div>';
+    html += '<div style="display:flex;gap:15px;">';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-weight:600;margin-bottom:8px;color:#ff5722;"><i class="layui-icon layui-icon-close"></i> 文件缺失（数据库有记录）</div>';
+    if (missing.length === 0) {
+      html += '<div style="color:#999;padding:10px;border:1px solid #eee;border-radius:4px;">无缺失文件</div>';
+    } else {
+      html += '<div style="border:1px solid #eee;border-radius:4px;max-height:300px;overflow:auto;">';
+      html += '<div style="padding:8px 10px;background:#f8f8f8;border-bottom:1px solid #eee;">' +
+              '<input type="checkbox" id="missing-all" lay-skin="primary" onclick="window._selectAllMissing(this)"> ' +
+              '<label for="missing-all" style="font-size:12px;cursor:pointer;">全选</label></div>';
+      missing.forEach(function(item) {
+        html += '<div style="padding:8px 10px;border-bottom:1px solid #f0f0f0;font-size:12px;">' +
+                '<input type="checkbox" name="missing-ck" value="' + item.build_id + '" lay-skin="primary" title="' + (item.extension_name || '未知') + '"> ' +
+                '<div style="margin-left:24px;color:#999;word-break:break-all;margin-top:2px;">' + (item.package_path || '') + '</div></div>';
+      });
+      html += '</div>';
+      html += '<button class="layui-btn layui-btn-xs layui-btn-danger" id="btn-del-records" style="margin-top:8px;"><i class="layui-icon layui-icon-delete"></i> 删除选中记录</button>';
+    }
+    html += '</div>';
+    html += '<div style="flex:1;min-width:0;">';
+    html += '<div style="font-weight:600;margin-bottom:8px;color:#ffb800;"><i class="layui-icon layui-icon-warn"></i> 孤儿文件（磁盘有文件）</div>';
+    if (orphan.length === 0) {
+      html += '<div style="color:#999;padding:10px;border:1px solid #eee;border-radius:4px;">无孤儿文件</div>';
+    } else {
+      html += '<div style="border:1px solid #eee;border-radius:4px;max-height:300px;overflow:auto;">';
+      html += '<div style="padding:8px 10px;background:#f8f8f8;border-bottom:1px solid #eee;">' +
+              '<input type="checkbox" id="orphan-all" lay-skin="primary" onclick="window._selectAllOrphan(this)"> ' +
+              '<label for="orphan-all" style="font-size:12px;cursor:pointer;">全选</label></div>';
+      orphan.forEach(function(item) {
+        var safePath = (item.file_path || '').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+        html += '<div style="padding:8px 10px;border-bottom:1px solid #f0f0f0;font-size:12px;">' +
+                '<input type="checkbox" name="orphan-ck" data-path="' + safePath + '" lay-skin="primary" title="' + formatSize(item.file_size) + '"> ' +
+                '<div style="margin-left:24px;color:#999;word-break:break-all;margin-top:2px;">' + (item.file_path || '') + '</div></div>';
+      });
+      html += '</div>';
+      html += '<button class="layui-btn layui-btn-xs layui-btn-warm" id="btn-del-orphan" style="margin-top:8px;"><i class="layui-icon layui-icon-delete"></i> 删除选中文件</button>';
+    }
+    html += '</div></div></div>';
+
+    var resultIndex = layer.open({
+      type: 1, title: '一致性检查结果', content: html, area: ['900px', '520px'], maxmin: true,
+      success: function() {
+        form.render();
+        var btnDelRecords = document.getElementById('btn-del-records');
+        if (btnDelRecords) {
+          btnDelRecords.onclick = function() {
+            var ids = [];
+            document.querySelectorAll('input[name="missing-ck"]:checked').forEach(function(el) { ids.push(el.value); });
+            if (ids.length === 0) { layer.msg('请先勾选要删除的记录', { icon: 0 }); return; }
+            layer.confirm('确定删除选中的 ' + ids.length + ' 条数据库记录？', function(idx) {
+              layer.close(idx);
+              var loadIdx = layer.load(2, { shade: [0.3, '#000'] });
+              var done = 0, failed = 0, total = ids.length;
+              ids.forEach(function(bid) {
+                apiFetch('/api/v1/repo-files/packages/' + bid, { method: 'DELETE' })
+                  .then(function(r) { return r.json(); }).then(function(res) { if (res.code === 0) done++; else failed++; })
+                  .catch(function() { failed++; })
+                  .then(function() {
+                    if (done + failed === total) {
+                      layer.close(loadIdx);
+                      layer.msg('已删除 ' + done + ' 条记录' + (failed ? '，' + failed + ' 条失败' : ''), { icon: failed ? 2 : 1 });
+                      layer.close(resultIndex); reloadRf();
+                      if (rfViewMode === 'tree') rfLoadTree();
+                    }
+                  });
+              });
+            });
+          };
+        }
+        var btnDelOrphan = document.getElementById('btn-del-orphan');
+        if (btnDelOrphan) {
+          btnDelOrphan.onclick = function() {
+            var paths = [];
+            document.querySelectorAll('input[name="orphan-ck"]:checked').forEach(function(el) { paths.push(el.getAttribute('data-path')); });
+            if (paths.length === 0) { layer.msg('请先勾选要删除的文件', { icon: 0 }); return; }
+            layer.confirm('确定删除选中的 ' + paths.length + ' 个孤儿文件？此操作不可恢复。', function(idx) {
+              layer.close(idx);
+              var loadIdx = layer.load(2, { shade: [0.3, '#000'] });
+              var done = 0, failed = 0, total = paths.length;
+              paths.forEach(function(fp) {
+                apiFetch('/api/v1/repo-files/orphan-delete', {
+                  method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ file_path: fp })
+                }).then(function(r) { return r.json(); }).then(function(res) { if (res.code === 0) done++; else failed++; })
+                  .catch(function() { failed++; })
+                  .then(function() {
+                    if (done + failed === total) {
+                      layer.close(loadIdx);
+                      layer.msg('已删除 ' + done + ' 个文件' + (failed ? '，' + failed + ' 个失败' : ''), { icon: failed ? 2 : 1 });
+                      layer.close(resultIndex);
+                    }
+                  });
+              });
+            });
+          };
+        }
+      }
+    });
+  }
+
+  // ═══════════════ Tab 3: 自定义发布 ═══════════════
+
+  function initPubTable() {
+    // 加载发布者列表
+    apiFetch('/api/v1/publish/publishers').then(function(r) { return r.json(); }).then(function(res) {
+      if (res.code !== 0) return;
+      var select = document.getElementById('pub-publisher-select');
+      while (select.options.length > 1) { select.remove(1); }
+      res.data.forEach(function(p) {
+        var opt = document.createElement('option');
+        opt.value = p.id;
+        opt.textContent = p.name + (p.display_name !== p.name ? ' (' + p.display_name + ')' : '');
+        select.appendChild(opt);
+      });
+      form.render('select');
+    });
+
+    // 渲染已发布扩展表格
+    table.render({
+      elem: '#pub-table',
+      url: '/api/v1/publish/extensions',
+      method: 'get',
+      parseData: function(res) {
+        return { code: res.code, msg: res.msg, count: res.count, data: res.data };
+      },
+      page: true,
+      limit: 10,
+      cols: [[
+        { field: 'name', title: '扩展名', width: 180, sort: true },
+        { field: 'description', title: '描述', minWidth: 200 },
+        { field: 'publisher', title: '发布者', width: 150 },
+        { field: 'license', title: '许可证', width: 100 },
+        { field: 'version_count', title: '版本数', width: 80 },
+        { field: 'build_count', title: '构建数', width: 80 },
+        { title: '操作', width: 100, toolbar: '#pub-row-ops', fixed: 'right' }
+      ]],
+      skin: 'row',
+      even: true
+    });
+  }
+
+  // 表单提交
+  document.getElementById('pub-form').onsubmit = function(e) {
+    e.preventDefault();
+    var formData = new FormData(this);
+    var btn = document.getElementById('pub-btn-submit');
+    btn.disabled = true; btn.textContent = '发布中...';
+    apiFetch('/api/v1/publish/upload', { method: 'POST', body: formData })
+      .then(function(r) { return r.json(); }).then(function(res) {
+        btn.disabled = false; btn.textContent = '发布扩展';
+        if (res.code === 0) {
+          layer.msg('发布成功: ' + res.data[0].ext_name, { icon: 1 });
+          document.getElementById('pub-form').reset();
+          form.render();
+          table.reload('pub-table');
+        } else { layer.msg(res.msg || '发布失败', { icon: 2 }); }
+      }).catch(function(err) {
+        btn.disabled = false; btn.textContent = '发布扩展';
+        layer.msg('请求失败: ' + err.message, { icon: 2 });
+      });
+    return false;
+  };
+
+  // 创建发布者
+  document.getElementById('pub-btn-create-publisher').onclick = function() {
+    var html = '<form class="layui-form" style="padding:20px;" lay-filter="pub-create-form">' +
+      '<div class="layui-form-item"><label class="layui-form-label">名称</label><div class="layui-input-block">' +
+      '<input type="text" name="name" required lay-verify="required" placeholder="如 com.mycorp" class="layui-input"></div></div>' +
+      '<div class="layui-form-item"><label class="layui-form-label">显示名</label><div class="layui-input-block">' +
+      '<input type="text" name="display_name" placeholder="如 My Corporation" class="layui-input"></div></div></form>';
+    layer.open({
+      title: '创建自定义发布者', content: html, area: ['450px', '280px'],
+      btn: ['创建', '取消'],
+      success: function() { form.render(); },
+      yes: function(index) {
+        var data = form.val('pub-create-form');
+        apiFetch('/api/v1/publish/publishers', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
+        }).then(function(r) { return r.json(); }).then(function(res) {
+          if (res.code === 0) {
+            layer.close(index);
+            layer.msg('创建成功，已生成 RSA 密钥对', { icon: 1 });
+            initPubTable();
+          } else { layer.msg(res.msg || '创建失败', { icon: 2 }); }
+        });
+      }
+    });
+  };
+
+  // 自定义发布行操作
+  table.on('tool(pub-table)', function(obj) {
+    if (obj.event === 'detail') {
+      window.location.href = '/extensions/' + encodeURIComponent(obj.data.name);
+    }
+  });
+
+  // ═══════════════ Tab 切换懒加载 ═══════════════
+  element.on('tab(ext-tab)', function(data) {
+    var idx = data.index;
+    if (idx === 0 && !tabLoaded.ext) { tabLoaded.ext = true; initExtTable(); }
+    else if (idx === 1 && !tabLoaded.rf) { tabLoaded.rf = true; initRfTable(); rfLoadTree(); }
+    else if (idx === 2 && !tabLoaded.pub) { tabLoaded.pub = true; initPubTable(); }
+  });
+
+  // 默认加载 Tab 1
+  tabLoaded.ext = true;
+  initExtTable();
+});
 </script>
 {% endblock %}

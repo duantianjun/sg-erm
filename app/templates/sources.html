@@ -117,11 +117,6 @@ layui.use(['table', 'layer', 'form'], function(){
     html += '<div class="layui-input-block">';
     html += '<input type="checkbox" name="enabled" lay-skin="switch" lay-text="启用|禁用"' + (d.enabled === false ? '' : ' checked') + '>';
     html += '</div></div>';
-    html += '<div class="layui-form-item" style="margin-bottom:0;">';
-    html += '<div class="layui-input-block">';
-    html += '<button class="layui-btn" lay-submit lay-filter="save-source">保存</button>';
-    html += '<button type="reset" class="layui-btn layui-btn-primary">重置</button>';
-    html += '</div></div>';
     html += '</form>';
     return html;
   }
@@ -132,30 +127,30 @@ layui.use(['table', 'layer', 'form'], function(){
       title: '添加仓库源',
       content: buildForm({}),
       area: ['600px', '400px'],
+      btn: ['保存', '取消'],
       success: function() {
         form.render();
+      },
+      yes: function(index) {
+        var data = form.val('layui-form');
+        var body = data;
+        body.enabled = body.enabled === 'on';
+        body.priority = parseInt(body.priority) || 100;
+        body.sync_interval = parseInt(body.sync_interval) || 3600;
+        apiFetch('/api/v1/sources', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).then(r => r.json()).then(res => {
+          if (res.code === 0) {
+            layer.close(index);
+            layer.msg('添加成功', { icon: 1 });
+            table.reload('sources-table');
+          } else {
+            layer.msg(res.msg || '添加失败', { icon: 2 });
+          }
+        });
       }
-    });
-
-    form.on('submit(save-source)', function(data) {
-      var body = data.field;
-      body.enabled = body.enabled === 'on';
-      body.priority = parseInt(body.priority) || 100;
-      body.sync_interval = parseInt(body.sync_interval) || 3600;
-      apiFetch('/api/v1/sources', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }).then(r => r.json()).then(res => {
-        if (res.code === 0) {
-          layer.closeAll();
-          layer.msg('添加成功', { icon: 1 });
-          table.reload('sources-table');
-        } else {
-          layer.msg(res.msg || '添加失败', { icon: 2 });
-        }
-      });
-      return false;
     });
   };
 
@@ -163,7 +158,6 @@ layui.use(['table', 'layer', 'form'], function(){
   table.on('tool(sources-table)', function(obj) {
     var data = obj.data;
     if (obj.event === 'edit') {
-      // 获取详情后编辑
       apiFetch('/api/v1/sources/' + data.id).then(r => r.json()).then(res => {
         if (res.code !== 0) return;
         var d = res.data[0];
@@ -171,30 +165,30 @@ layui.use(['table', 'layer', 'form'], function(){
           title: '编辑仓库源',
           content: buildForm(d),
           area: ['600px', '400px'],
+          btn: ['保存', '取消'],
           success: function() {
             form.render();
+          },
+          yes: function(index) {
+            var formData = form.val('layui-form');
+            var body = formData;
+            body.enabled = body.enabled === 'on';
+            body.priority = parseInt(body.priority) || 100;
+            body.sync_interval = parseInt(body.sync_interval) || 3600;
+            apiFetch('/api/v1/sources/' + d.id, {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+            }).then(r => r.json()).then(res => {
+              if (res.code === 0) {
+                layer.close(index);
+                layer.msg('更新成功', { icon: 1 });
+                table.reload('sources-table');
+              } else {
+                layer.msg(res.msg || '更新失败', { icon: 2 });
+              }
+            });
           }
-        });
-
-        form.on('submit(save-source)', function(formData) {
-          var body = formData.field;
-          body.enabled = body.enabled === 'on';
-          body.priority = parseInt(body.priority) || 100;
-          body.sync_interval = parseInt(body.sync_interval) || 3600;
-          apiFetch('/api/v1/sources/' + d.id, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-          }).then(r => r.json()).then(res => {
-            if (res.code === 0) {
-              layer.closeAll();
-              layer.msg('更新成功', { icon: 1 });
-              table.reload('sources-table');
-            } else {
-              layer.msg(res.msg || '更新失败', { icon: 2 });
-            }
-          });
-          return false;
         });
       });
     } else if (obj.event === 'delete') {

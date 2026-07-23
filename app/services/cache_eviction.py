@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """缓存淘汰服务。
 
 三种淘汰策略（按优先级）：
@@ -7,17 +8,22 @@
 
 提供手动触发和定时自动执行。
 """
+import logging
 import os
 import shutil
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import delete, func, select, update
 
 from app.config import settings
 from app.database import async_session_factory
+from app.logging_config import get_task_logger
 from app.models import ExtensionBuild, ExtensionVersion, Extension
+
+logger = logging.getLogger(__name__)
+task_logger = get_task_logger()
 
 
 async def get_disk_usage(repo_dir: Path) -> tuple[int, int]:
@@ -54,11 +60,13 @@ async def evict_by_disk_threshold(repo_dir: Path) -> dict:
     if current_pct < max_pct:
         return {"evicted": 0, "freed_bytes": 0, "current_pct": round(current_pct, 1)}
 
+    task_logger.info(
+        f"[缓存淘汰] 磁盘阈值触发: current_pct={current_pct:.1f}% >= max_pct={max_pct}%, target={target_pct}%"
+    )
     evicted = 0
     freed = 0
 
     async with async_session_factory() as session:
-        # 按 last_accessed 升序（最久未访问的优先删除）
         result = await session.execute(
             select(ExtensionBuild)
             .where(ExtensionBuild.cached == True)
@@ -67,20 +75,17 @@ async def evict_by_disk_threshold(repo_dir: Path) -> dict:
         builds = result.scalars().all()
 
         for build in builds:
-            # 检查是否已达到目标
             used, total = await get_disk_usage(repo_dir)
             current_pct = get_usage_percent(used, total)
             if current_pct <= target_pct:
                 break
 
-            # 删除文件
             pkg_path = repo_dir / build.package_path
             if pkg_path.exists():
                 file_size = pkg_path.stat().st_size
                 pkg_path.unlink()
                 freed += file_size
 
-            # 更新数据库
             build.cached = False
             build.package_size = 0
             build.package_path = ""
@@ -88,6 +93,9 @@ async def evict_by_disk_threshold(repo_dir: Path) -> dict:
 
         await session.commit()
 
+    task_logger.info(
+        f"[缓存淘汰] 磁盘阈值淘汰完成: evicted={evicted} freed={freed} bytes, current_pct={current_pct:.1f}%"
+    )
     return {
         "evicted": evicted,
         "freed_bytes": freed,
@@ -98,7 +106,7 @@ async def evict_by_disk_threshold(repo_dir: Path) -> dict:
 async def evict_by_ttl(repo_dir: Path) -> dict:
     """TTL 淘汰：删除超过 cache_ttl_days 未访问的缓存包。"""
     ttl_days = settings.cache_ttl_days
-    cutoff = datetime.utcnow() - timedelta(days=ttl_days)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ttl_days)
 
     evicted = 0
     freed = 0
@@ -114,6 +122,8 @@ async def evict_by_ttl(repo_dir: Path) -> dict:
         )
         builds = result.scalars().all()
 
+        task_logger.info(f"[缓存淘汰] TTL 淘汰开始: ttl_days={ttl_days} candidates={len(builds)}")
+
         for build in builds:
             pkg_path = repo_dir / build.package_path
             if pkg_path.exists():
@@ -127,6 +137,9 @@ async def evict_by_ttl(repo_dir: Path) -> dict:
 
         await session.commit()
 
+    task_logger.info(
+        f"[缓存淘汰] TTL 淘汰完成: evicted={evicted} freed={freed} bytes"
+    )
     return {"evicted": evicted, "freed_bytes": freed, "ttl_days": ttl_days}
 
 
@@ -143,24 +156,24 @@ async def evict_old_versions(repo_dir: Path) -> dict:
     freed = 0
 
     async with async_session_factory() as session:
-        # 获取所有扩展
         extensions = (await session.execute(select(Extension))).scalars().all()
 
+        task_logger.info(
+            f"[缓存淘汰] 版本保留淘汰开始: keep_versions={keep} extensions={len(extensions)}"
+        )
+
         for ext in extensions:
-            # 获取该扩展的所有版本
             versions = (await session.execute(
                 select(ExtensionVersion)
                 .where(ExtensionVersion.extension_id == ext.id)
                 .order_by(ExtensionVersion.created_at.desc())
             )).scalars().all()
 
-            # 保留最新 keep 个版本
             versions_to_keep = set()
             for i, ver in enumerate(versions):
                 if i < keep:
                     versions_to_keep.add(ver.id)
                 else:
-                    # 删除该版本的所有构建
                     builds = (await session.execute(
                         select(ExtensionBuild)
                         .where(
@@ -182,6 +195,9 @@ async def evict_old_versions(repo_dir: Path) -> dict:
 
         await session.commit()
 
+    task_logger.info(
+        f"[缓存淘汰] 版本保留淘汰完成: evicted={evicted} freed={freed} bytes"
+    )
     return {"evicted": evicted, "freed_bytes": freed, "keep_versions": keep}
 
 
@@ -191,6 +207,7 @@ async def run_full_eviction() -> dict:
     按优先级：磁盘阈值 → TTL → 版本保留
     """
     repo_dir = settings.repo_dir
+    task_logger.info(f"[缓存淘汰] 开始完整淘汰流程 repo_dir={repo_dir}")
 
     result = {
         "disk_threshold": await evict_by_disk_threshold(repo_dir),
@@ -198,14 +215,16 @@ async def run_full_eviction() -> dict:
         "old_versions": await evict_old_versions(repo_dir),
     }
 
-    # 汇总
     total_evicted = sum(r["evicted"] for r in result.values())
     total_freed = sum(r["freed_bytes"] for r in result.values())
     result["total_evicted"] = total_evicted
     result["total_freed_bytes"] = total_freed
 
-    # 最终磁盘使用率
     used, total = await get_disk_usage(repo_dir)
     result["final_disk_usage_pct"] = round(get_usage_percent(used, total), 1)
 
+    task_logger.info(
+        f"[缓存淘汰] 完整淘汰完成: total_evicted={total_evicted} "
+        f"total_freed={total_freed} bytes final_pct={result['final_disk_usage_pct']}%"
+    )
     return result

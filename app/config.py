@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """SG-ERM 全局配置。
 
 使用 pydantic-settings 从环境变量加载配置。
@@ -6,9 +7,14 @@
 环境变量命名规则: SG_ERM_<大写字段名>
 例如: SG_ERM_LISTEN_PORT=18070
 """
+import logging
+import secrets
 from pathlib import Path
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -64,8 +70,9 @@ class Settings(BaseSettings):
     cache_keep_versions: int = 3
 
     # === 安全 ===
-    # JWT 签名密钥（生产环境必须通过环境变量覆盖）
-    secret_key: str = "change-me-in-production"
+    # JWT 签名密钥（必须通过环境变量 SG_ERM_SECRET_KEY 设置）
+    # 最小长度 32 字节（256 位），建议使用 secrets.token_hex(32) 生成
+    secret_key: str = ""
     # JWT 算法
     jwt_algorithm: str = "HS256"
     # Access token 过期时间（分钟）
@@ -78,6 +85,22 @@ class Settings(BaseSettings):
     # === 健康检查 ===
     # 仓库源健康检查间隔（秒）
     health_check_interval: int = 60
+
+    @field_validator("secret_key")
+    @classmethod
+    def validate_secret_key(cls, v: str) -> str:
+        """校验 secret_key 强度。"""
+        if not v:
+            raise ValueError(
+                "SG_ERM_SECRET_KEY 必须设置。"
+                "请使用 `python -c \"import secrets; print(secrets.token_hex(32))\"` 生成安全密钥"
+            )
+        if len(v) < 32:
+            logger.warning(
+                f"SECRET_KEY 长度 {len(v)} 过短（建议至少 32 字符），"
+                "使用短密钥可能导致安全风险"
+            )
+        return v
 
     @property
     def db_path(self) -> Path:
@@ -97,3 +120,8 @@ class Settings(BaseSettings):
 
 # 单例配置对象
 settings = Settings()
+
+
+def generate_secret_key() -> str:
+    """生成安全的 256 位随机密钥。"""
+    return secrets.token_hex(32)

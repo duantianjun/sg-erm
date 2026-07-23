@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """仓库文件浏览器 API。
 
 提供本地仓库中缓存扩展包的浏览、删除、重新下载、SHA256 验证和一致性检查。
@@ -24,7 +25,7 @@ from app.models import (
     User,
 )
 from app.services.auth_service import require_auth
-from app.services.naming import get_package_url
+from app.services.naming import get_package_url, parse_package_name
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +34,26 @@ router = APIRouter(
     tags=["repo-files"],
     dependencies=[Depends(require_auth)],
 )
+
+
+def _validate_path(relative_path: str, base_dir: str) -> str:
+    """验证相对路径是否在 base_dir 内，防止路径遍历攻击。
+
+    Args:
+        relative_path: 相对路径
+        base_dir: 基础目录
+
+    Returns:
+        规范化后的绝对路径
+
+    Raises:
+        ValueError: 如果路径超出 base_dir
+    """
+    full_path = os.path.normpath(os.path.join(base_dir, relative_path))
+    base_path = os.path.normpath(base_dir)
+    if not full_path.startswith(base_path + os.sep) and full_path != base_path:
+        raise ValueError(f"非法路径: {relative_path}")
+    return full_path
 
 
 # ─── 包列表 ────────────────────────────────────────────────────
@@ -52,12 +73,19 @@ async def list_packages(
     JOIN ExtensionVersion → Extension → Publisher 获取完整元数据，
     对每条记录检查磁盘文件是否存在。
     """
+    logger.debug(
+        f"[仓库文件API] 查询包列表 page={page} limit={limit} "
+        f"publisher={publisher or 'all'} arch={arch or 'all'} "
+        f"os={os_name or 'all'} keyword={keyword or 'none'}"
+    )
     query = (
         select(
             ExtensionBuild,
             ExtensionVersion.version,
             Extension.name,
             Publisher.name,
+            Extension.description,
+            Extension.license,
         )
         .join(ExtensionVersion, ExtensionBuild.version_id == ExtensionVersion.id)
         .join(Extension, ExtensionVersion.extension_id == Extension.id)
@@ -91,7 +119,7 @@ async def list_packages(
 
     repo_dir = str(settings.repo_dir)
     data = []
-    for build, version, ext_name, pub_name in rows:
+    for build, version, ext_name, pub_name, ext_desc, ext_license in rows:
         file_path = os.path.join(repo_dir, build.package_path)
         data.append({
             "build_id": build.id,
@@ -100,6 +128,8 @@ async def list_packages(
             "os": build.os,
             "package_name": os.path.basename(build.package_path),
             "extension_name": ext_name,
+            "description": ext_desc or "",
+            "license": ext_license or "",
             "version": version,
             "postgres_version": build.postgres_version,
             "flavor": build.flavor,
@@ -111,6 +141,7 @@ async def list_packages(
             "file_exists": os.path.exists(file_path),
         })
 
+    logger.info(f"[仓库文件API] 返回 {len(data)} 个包，总计 {total}")
     return success(data, total)
 
 
@@ -121,6 +152,7 @@ async def get_tree(
     db: AsyncSession = Depends(get_db),
 ):
     """目录树（publisher → arch → os 三级聚合，计算每层 count）。"""
+    logger.info("[仓库文件API] 查询目录树")
     query = (
         select(Publisher.name, ExtensionBuild.arch, ExtensionBuild.os, func.count())
         .join(ExtensionVersion, ExtensionBuild.version_id == ExtensionVersion.id)
@@ -175,12 +207,20 @@ async def delete_package(
     - 文件不存在时返回 404
     - 删除成功后更新 cached=False 并写 AuditLog
     """
+    logger.info(f"[仓库文件API] 删除包 build_id={build_id} user={current_user.username}")
     build = await db.get(ExtensionBuild, build_id)
     if not build:
+        logger.warning(f"[仓库文件API] 删除失败：构建记录不存在 build_id={build_id}")
         return error_response("构建记录不存在", status_code=404)
 
-    file_path = os.path.join(str(settings.repo_dir), build.package_path)
+    try:
+        file_path = _validate_path(build.package_path, str(settings.repo_dir))
+    except ValueError as e:
+        logger.warning(f"[仓库文件API] 删除失败：路径非法 build_id={build_id} path={build.package_path}")
+        return error_response(str(e), status_code=400)
+
     if not os.path.exists(file_path):
+        logger.warning(f"[仓库文件API] 删除失败：文件不存在 build_id={build_id} path={file_path}")
         return error_response("文件不存在", status_code=404)
 
     try:
@@ -199,6 +239,7 @@ async def delete_package(
     db.add(audit)
     await db.commit()
 
+    logger.info(f"[仓库文件API] 删除成功 build_id={build_id} path={build.package_path}")
     return success({"build_id": build_id}, 1, "已删除文件，缓存已清除")
 
 
@@ -218,6 +259,7 @@ async def redownload_package(
     - 更新 cached=True, package_size, sha256
     - 写 AuditLog (action=repo_file_redownload)
     """
+    logger.info(f"[仓库文件API] 重新下载包 build_id={build_id} user={current_user.username}")
     result = await db.execute(
         select(ExtensionBuild, Publisher.name, RepositorySource.url)
         .join(ExtensionVersion, ExtensionBuild.version_id == ExtensionVersion.id)
@@ -228,17 +270,23 @@ async def redownload_package(
     )
     row = result.first()
     if not row:
+        logger.warning(f"[仓库文件API] 重新下载失败：构建记录不存在 build_id={build_id}")
         return error_response("构建记录不存在", status_code=404)
 
     build, pub_name, source_url = row
     source_url = source_url or settings.upstream_repo_url
 
-    # 重建上游 URL: {repo_url}/{publisher}/{arch}/{os}/{package_name}.tar
     package_name = os.path.basename(build.package_path)
     base_name = package_name[:-4] if package_name.endswith(".tar") else package_name
     url = get_package_url(source_url, pub_name, build.arch, build.os, base_name)
 
-    local_file = os.path.join(str(settings.repo_dir), build.package_path)
+    try:
+        local_file = _validate_path(build.package_path, str(settings.repo_dir))
+    except ValueError as e:
+        logger.warning(f"[仓库文件API] 重新下载失败：路径非法 build_id={build_id} path={build.package_path}")
+        return error_response(str(e), status_code=400)
+
+    logger.debug(f"[仓库文件API] 下载URL: {url}")
 
     try:
         os.makedirs(os.path.dirname(local_file), exist_ok=True)
@@ -246,6 +294,7 @@ async def redownload_package(
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 if resp.status == 404:
+                    logger.warning(f"[仓库文件API] 上游包不存在 url={url}")
                     return error_response("上游包不存在", status_code=502)
                 resp.raise_for_status()
                 with open(local_file, "wb") as f:
@@ -274,6 +323,10 @@ async def redownload_package(
     db.add(audit)
     await db.commit()
 
+    logger.info(
+        f"[仓库文件API] 重新下载成功 build_id={build_id} "
+        f"path={build.package_path} size={build.package_size}"
+    )
     return success({
         "build_id": build_id,
         "package_path": build.package_path,
@@ -297,18 +350,35 @@ async def verify_package(
     - 返回 {matched, computed, stored}
     - 写 AuditLog (action=repo_file_verify)
     """
+    logger.info(f"[仓库文件API] 验证SHA256 build_id={build_id} user={current_user.username}")
     build = await db.get(ExtensionBuild, build_id)
     if not build:
+        logger.warning(f"[仓库文件API] 验证失败：构建记录不存在 build_id={build_id}")
         return error_response("构建记录不存在", status_code=404)
 
-    file_path = os.path.join(str(settings.repo_dir), build.package_path)
+    try:
+        file_path = _validate_path(build.package_path, str(settings.repo_dir))
+    except ValueError as e:
+        logger.warning(f"[仓库文件API] 验证失败：路径非法 build_id={build_id}")
+        return error_response(str(e), status_code=400)
+
     if not os.path.exists(file_path):
+        logger.warning(f"[仓库文件API] 验证失败：文件不存在 build_id={build_id} path={file_path}")
         return error_response("文件不存在", status_code=404)
 
     with open(file_path, "rb") as f:
         computed = hashlib.sha256(f.read()).hexdigest()
     stored = build.sha256 or ""
-    matched = computed == stored
+
+    if not stored:
+        # 数据库无 SHA256 记录，自动计算并存储
+        build.sha256 = computed
+        await db.flush()
+        matched = True
+        msg = "SHA256 已自动计算并保存"
+    else:
+        matched = computed == stored
+        msg = "SHA256 匹配" if matched else "SHA256 不匹配"
 
     audit = AuditLog(
         actor=current_user.username,
@@ -319,11 +389,19 @@ async def verify_package(
     db.add(audit)
     await db.commit()
 
+    if matched:
+        logger.info(f"[仓库文件API] 验证成功 build_id={build_id} path={build.package_path}")
+    else:
+        logger.warning(
+            f"[仓库文件API] SHA256 不匹配 build_id={build_id} path={build.package_path} "
+            f"computed={computed[:12]}... stored={stored[:12]}..."
+        )
+
     return success({
         "matched": matched,
         "computed": computed,
-        "stored": stored,
-    }, 1)
+        "stored": stored or computed,
+    }, 1, msg)
 
 
 # ─── 一致性检查 ────────────────────────────────────────────────
@@ -338,6 +416,7 @@ async def consistency_check(
     - 与数据库 ExtensionBuild.package_path (cached=True) 集合做差集
     - 返回 {missing_files, orphan_files}
     """
+    logger.info("[仓库文件API] 开始一致性检查")
     repo_dir = str(settings.repo_dir)
 
     # 收集磁盘上所有 .tar 相对路径
@@ -391,3 +470,143 @@ async def consistency_check(
         "missing_files": missing_data,
         "orphan_files": orphan_data,
     }, 1)
+
+    logger.info(
+        f"[仓库文件API] 一致性检查完成: missing={len(missing_data)} orphans={len(orphan_data)}"
+    )
+
+
+# ─── 修复一致性（将孤儿文件同步到数据库） ────────────────────────
+
+@router.post("/repair-consistency")
+async def repair_consistency(
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(require_auth),
+):
+    """修复一致性：将磁盘上的孤儿文件同步到数据库。
+
+    扫描所有磁盘上的 .tar 文件，如果数据库中没有对应记录，
+    则从路径和包名解析信息并创建完整的三层记录：
+    Publisher -> Extension -> ExtensionVersion -> ExtensionBuild
+
+    这用于修复历史遗留问题（代理下载时没有创建数据库记录）。
+    """
+    logger.info(f"[仓库文件API] 开始修复一致性 user={current_user.username}")
+    repo_dir = str(settings.repo_dir)
+
+    db_result = await db.execute(
+        select(ExtensionBuild.package_path).where(
+            ExtensionBuild.cached == True  # noqa: E712
+        )
+    )
+    db_files = {row[0] for row in db_result.all()}
+
+    created_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    for root, _dirs, files in os.walk(repo_dir):
+        for fname in files:
+            if fname.endswith(".tar"):
+                full_path = os.path.join(root, fname)
+                rel_path = os.path.relpath(full_path, repo_dir).replace("\\", "/")
+
+                if rel_path in db_files:
+                    skipped_count += 1
+                    continue
+
+                try:
+                    parts = rel_path.split("/")
+                    if len(parts) < 4:
+                        failed_count += 1
+                        continue
+
+                    publisher = parts[0]
+                    arch = parts[1]
+                    os_name = parts[2]
+                    package_name = fname[:-4] if fname.endswith(".tar") else fname
+
+                    ext_info = parse_package_name(package_name)
+                    if not ext_info:
+                        logger.warning(f"无法解析包名: {package_name}")
+                        failed_count += 1
+                        continue
+
+                    pub_result = await db.execute(
+                        select(Publisher).where(Publisher.name == publisher)
+                    )
+                    pub = pub_result.scalar_one_or_none()
+                    if not pub:
+                        pub = Publisher(name=publisher, display_name=publisher)
+                        db.add(pub)
+                        await db.flush()
+
+                    ext_result = await db.execute(
+                        select(Extension).where(Extension.name == ext_info["name"])
+                    )
+                    ext = ext_result.scalar_one_or_none()
+                    if not ext:
+                        ext = Extension(name=ext_info["name"], publisher_id=pub.id)
+                        db.add(ext)
+                        await db.flush()
+
+                    ver_result = await db.execute(
+                        select(ExtensionVersion).where(
+                            ExtensionVersion.extension_id == ext.id,
+                            ExtensionVersion.version == ext_info["version"],
+                        )
+                    )
+                    ver = ver_result.scalar_one_or_none()
+                    if not ver:
+                        ver = ExtensionVersion(
+                            extension_id=ext.id,
+                            version=ext_info["version"],
+                            channel="stable",
+                        )
+                        db.add(ver)
+                        await db.flush()
+
+                    package_size = os.path.getsize(full_path) if os.path.exists(full_path) else None
+
+                    new_build = ExtensionBuild(
+                        version_id=ver.id,
+                        postgres_version=ext_info["postgres_version"],
+                        arch=arch,
+                        os=os_name,
+                        flavor=ext_info["flavor"],
+                        build=ext_info["build"],
+                        package_path=rel_path,
+                        package_size=package_size,
+                        cached=True,
+                    )
+                    db.add(new_build)
+                    await db.commit()
+
+                    created_count += 1
+                    db_files.add(rel_path)
+
+                    if created_count % 100 == 0:
+                        logger.info(f"[仓库文件API] 已创建 {created_count} 条记录")
+
+                except Exception as e:
+                    logger.warning(f"创建记录失败 {rel_path}: {e}")
+                    failed_count += 1
+                    await db.rollback()
+
+    audit = AuditLog(
+        actor=current_user.username,
+        action="repo_file_repair",
+        resource=f"created={created_count}, skipped={skipped_count}, failed={failed_count}",
+        result="success",
+    )
+    db.add(audit)
+    await db.commit()
+
+    logger.info(
+        f"[仓库文件API] 一致性修复完成: created={created_count}, skipped={skipped_count}, failed={failed_count}"
+    )
+    return success({
+        "created": created_count,
+        "skipped": skipped_count,
+        "failed": failed_count,
+    }, 1, f"修复完成，共创建 {created_count} 条记录")

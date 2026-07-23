@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """StackGres 扩展包命名工具。
 
 从 sync-stackgres-repo.py 迁移的核心函数，与 StackGres Java 端的
@@ -89,3 +90,60 @@ def get_local_path(publisher: str, arch: str, os_name: str, package_name: str) -
         -> "com.ongres/x86_64/linux/postgis-3.4-pg16.4.tar"
     """
     return f"{publisher}/{arch}/{os_name}/{package_name}.tar"
+
+
+def validate_path_segment(segment: str) -> bool:
+    """验证路径段是否安全（不包含路径遍历字符）。
+
+    Args:
+        segment: 路径段（如 publisher, arch, os_name, package_name）
+
+    Returns:
+        True 表示安全，False 表示包含危险字符
+    """
+    if not segment:
+        return False
+    if ".." in segment or "/" in segment or "\\" in segment:
+        return False
+    return True
+
+
+def parse_package_name(package_name: str) -> dict:
+    """从包名解析扩展信息。
+
+    包名格式: {name}-{version}-{flavor}{pgVersion}[-build-{build}]
+
+    Args:
+        package_name: 包名（如 postgis-3.4-pg16.4 或 postgis-3.4-pg16.4-build-6.51）
+
+    Returns:
+        解析结果字典，包含 name, version, flavor, postgres_version, build
+    """
+    parts = package_name.split("-")
+    if len(parts) < 3:
+        return None
+
+    result = {
+        "name": parts[0],
+        "version": parts[1],
+    }
+
+    # 解析 flavor + pgVersion（如 pg16.4）
+    third_part = parts[2]
+    if third_part.startswith("pg"):
+        result["flavor"] = "pg"
+        result["postgres_version"] = third_part[2:]
+    elif third_part.startswith("bf"):
+        result["flavor"] = "bf"
+        result["postgres_version"] = third_part[2:]
+    else:
+        result["flavor"] = "pg"
+        result["postgres_version"] = third_part
+
+    # 解析 build（如 -build-6.51）
+    if len(parts) >= 5 and parts[3] == "build":
+        result["build"] = parts[4]
+    else:
+        result["build"] = None
+
+    return result

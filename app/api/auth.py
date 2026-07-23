@@ -1,12 +1,15 @@
+﻿# -*- coding: utf-8 -*-
 """认证 API。
 
 提供登录、登出、当前用户信息、密码修改。
 """
-from datetime import datetime
+import logging
+import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,17 +23,48 @@ from app.services.auth_service import (
     create_refresh_token,
     get_current_user,
     get_password_hash,
+    increment_token_version,
     require_auth,
     require_admin,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+
+def validate_password_strength(password: str) -> tuple[bool, str]:
+    """校验密码强度。
+
+    要求:
+    - 至少 8 位
+    - 包含至少一个大写字母
+    - 包含至少一个小写字母
+    - 包含至少一个数字或特殊字符
+    """
+    if len(password) < 8:
+        return False, "密码长度至少 8 位"
+    if not re.search(r"[A-Z]", password):
+        return False, "密码需包含至少一个大写字母"
+    if not re.search(r"[a-z]", password):
+        return False, "密码需包含至少一个小写字母"
+    if not re.search(r"[0-9!@#$%^&*(),.?\":{}|<>]", password):
+        return False, "密码需包含至少一个数字或特殊字符"
+    return True, ""
 
 
 class PasswordChange(BaseModel):
     """修改密码请求。"""
     old_password: str
     new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def validate_new_password(cls, v: str) -> str:
+        valid, reason = validate_password_strength(v)
+        if not valid:
+            raise ValueError(reason)
+        return v
 
 
 class UserCreate(BaseModel):
@@ -39,6 +73,14 @@ class UserCreate(BaseModel):
     password: str
     email: str | None = None
     is_admin: bool = False
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        valid, reason = validate_password_strength(v)
+        if not valid:
+            raise ValueError(reason)
+        return v
 
 
 @router.post("/login")
@@ -52,25 +94,27 @@ async def login(
     """
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
+        logger.warning(f"[认证API] 登录失败 username={form_data.username}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="用户名或密码错误",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    # 更新最后登录时间
-    user.last_login = datetime.utcnow()
+    user.last_login = datetime.now(timezone.utc)
     await db.commit()
 
-    access_token = create_access_token(data={"sub": user.id})
-    refresh_token = create_refresh_token(data={"sub": user.id})
+    access_token = create_access_token(data={"sub": user.id, "token_version": user.token_version})
+    refresh_token = create_refresh_token(data={"sub": user.id, "token_version": user.token_version})
+
+    logger.info(f"[认证API] 用户登录成功 user_id={user.id} username={user.username} is_admin={user.is_admin}")
 
     return success(
         {
             "access_token": access_token,
             "refresh_token": refresh_token,
             "token_type": "bearer",
-            "expires_in": 24 * 60 * 60,  # 秒
+            "expires_in": 24 * 60 * 60,
             "user": {
                 "id": user.id,
                 "username": user.username,
@@ -86,6 +130,7 @@ async def login(
 @router.get("/me")
 async def get_me(user: User = Depends(require_auth)):
     """获取当前登录用户信息。"""
+    logger.debug(f"[认证API] 获取用户信息 user_id={user.id} username={user.username}")
     return success(
         {
             "id": user.id,
@@ -114,14 +159,12 @@ async def refresh_token(
     class RefreshBody(BaseModel):
         refresh_token: str
 
-    # 尝试从请求体获取
     try:
         body = await request.json()
         token_str = body.get("refresh_token", "")
     except Exception:
         token_str = ""
 
-    # 回退到 Authorization 头
     if not token_str:
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
@@ -141,6 +184,7 @@ async def refresh_token(
         )
         token_type = payload.get("type")
         user_id = payload.get("sub")
+        token_version = payload.get("token_version", 0)
 
         if token_type != "refresh" or not user_id:
             raise HTTPException(
@@ -153,7 +197,6 @@ async def refresh_token(
             detail="刷新令牌已过期或无效",
         )
 
-    # 验证用户仍有效
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
@@ -162,9 +205,16 @@ async def refresh_token(
             detail="用户不存在或已禁用",
         )
 
-    # 签发新的访问令牌
-    new_access = create_access_token(data={"sub": user.id})
-    new_refresh = create_refresh_token(data={"sub": user.id})
+    if token_version != user.token_version:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="令牌已失效，请重新登录",
+        )
+
+    new_access = create_access_token(data={"sub": user.id, "token_version": user.token_version})
+    new_refresh = create_refresh_token(data={"sub": user.id, "token_version": user.token_version})
+
+    logger.info(f"[认证API] 刷新令牌成功 user_id={user.id}")
 
     return success(
         {
@@ -184,16 +234,23 @@ async def change_password(
     user: User = Depends(require_auth),
     db: AsyncSession = Depends(get_db),
 ):
-    """修改当前用户密码。"""
+    """修改当前用户密码。
+
+    修改密码后自动递增 token_version，使所有旧令牌失效。
+    """
     from app.services.auth_service import verify_password
 
     if not verify_password(body.old_password, user.password_hash):
+        logger.warning(f"[认证API] 修改密码失败：原密码错误 user_id={user.id}")
         return error_response("原密码错误")
 
     user.password_hash = get_password_hash(body.new_password)
-    await db.commit()
+    await db.flush()
 
-    return success({}, 1, "密码修改成功")
+    await increment_token_version(db, user.id)
+
+    logger.info(f"[认证API] 用户修改密码成功 user_id={user.id} token_version+1")
+    return success({}, 1, "密码修改成功，已退出所有会话")
 
 
 # ─── 用户管理（仅管理员）───────────────────────────────
@@ -204,6 +261,7 @@ async def list_users(
     _: User = Depends(require_admin),
 ):
     """用户列表（仅管理员）。"""
+    logger.info("[认证API] 管理员查询用户列表")
     result = await db.execute(select(User).order_by(User.username))
     users = result.scalars().all()
 
@@ -229,11 +287,11 @@ async def create_user(
     _: User = Depends(require_admin),
 ):
     """创建用户（仅管理员）。"""
-    # 检查用户名是否已存在
     existing = await db.scalar(
         select(User).where(User.username == body.username)
     )
     if existing:
+        logger.warning(f"[认证API] 创建用户失败：用户名已存在 username={body.username}")
         return error_response(f"用户名 '{body.username}' 已存在")
 
     user = User(
@@ -246,6 +304,7 @@ async def create_user(
     await db.commit()
     await db.refresh(user)
 
+    logger.info(f"[认证API] 创建用户成功 username={user.username} is_admin={user.is_admin} user_id={user.id}")
     return success(
         {"id": user.id, "username": user.username},
         1,

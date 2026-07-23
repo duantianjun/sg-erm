@@ -1,7 +1,9 @@
+﻿# -*- coding: utf-8 -*-
 """自定义扩展发布 API。
 
 提供扩展上传、发布者管理和已发布扩展列表。
 """
+import logging
 import os
 import tempfile
 import uuid
@@ -17,6 +19,8 @@ from app.database import get_db
 from app.models import Extension, ExtensionBuild, ExtensionVersion, Publisher, User
 from app.services.auth_service import require_admin
 from app.services.publish_service import create_custom_publisher, publish_extension
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/publish",
@@ -38,6 +42,7 @@ async def list_publishers(
     db: AsyncSession = Depends(get_db),
 ):
     """自定义发布者列表。"""
+    logger.info("[发布API] 查询自定义发布者列表")
     result = await db.execute(
         select(Publisher)
         .where(Publisher.is_custom == True)
@@ -65,15 +70,17 @@ async def create_publisher(
     db: AsyncSession = Depends(get_db),
 ):
     """创建自定义发布者（自动生成 RSA 密钥对）。"""
-    # 检查名称是否已存在
+    logger.info(f"[发布API] 创建自定义发布者 name={body.name}")
     existing = await db.scalar(
         select(func.count()).select_from(Publisher).where(Publisher.name == body.name)
     )
     if existing and existing > 0:
+        logger.warning(f"[发布API] 创建发布者失败：名称已存在 name={body.name}")
         return error_response(f"发布者 '{body.name}' 已存在")
 
     publisher = await create_custom_publisher(db, body.name, body.display_name)
 
+    logger.info(f"[发布API] 创建发布者成功 name={publisher.name} id={publisher.id}")
     return success(
         {
             "id": publisher.id,
@@ -92,16 +99,20 @@ async def delete_publisher(
     db: AsyncSession = Depends(get_db),
 ):
     """删除自定义发布者（谨慎操作，会删除关联的自定义扩展）。"""
+    logger.info(f"[发布API] 删除发布者 publisher_id={publisher_id}")
     publisher = await db.get(Publisher, publisher_id)
     if not publisher:
+        logger.warning(f"[发布API] 删除发布者失败：不存在 publisher_id={publisher_id}")
         return error_response("发布者不存在", status_code=404)
 
     if not publisher.is_custom:
+        logger.warning(f"[发布API] 删除发布者失败：尝试删除系统发布者 publisher_id={publisher_id}")
         return error_response("不能删除系统发布者")
 
     await db.delete(publisher)
     await db.commit()
 
+    logger.info(f"[发布API] 删除发布者成功 name={publisher.name}")
     return success({"id": publisher_id}, 1, "删除成功")
 
 
@@ -136,6 +147,7 @@ async def upload_extension(
     """
     # 验证文件类型
     if not tgz_file.filename or not tgz_file.filename.endswith(".tgz"):
+        logger.warning(f"[发布API] 上传失败：非 .tgz 文件 filename={tgz_file.filename}")
         return error_response("只接受 .tgz 文件")
 
     # 解析标签
@@ -145,12 +157,18 @@ async def upload_extension(
     tmp_dir = tempfile.mkdtemp(prefix="sg-erm-upload-")
     tmp_path = os.path.join(tmp_dir, f"{uuid.uuid4()}.tgz")
 
+    logger.info(
+        f"[发布API] 开始上传扩展 ext_name={ext_name} version={version} "
+        f"publisher_id={publisher_id} pg_version={pg_version}"
+    )
+
     try:
         with open(tmp_path, "wb") as f:
             content = await tgz_file.read()
             f.write(content)
 
-        # 发布
+        logger.debug(f"[发布API] 已保存临时文件 tmp_path={tmp_path} size={len(content)} bytes")
+
         result = await publish_extension(
             session=db,
             publisher_id=publisher_id,
@@ -169,6 +187,10 @@ async def upload_extension(
         )
 
         if result["success"]:
+            logger.info(
+                f"[发布API] 发布成功 ext_name={ext_name} version={version} "
+                f"package_path={result['package_path']}"
+            )
             return success(
                 {
                     "package_path": result["package_path"],
@@ -180,10 +202,10 @@ async def upload_extension(
                 "发布成功",
             )
         else:
+            logger.error(f"[发布API] 发布失败 ext_name={ext_name} error={result['error']}")
             return error_response(result["error"])
 
     finally:
-        # 清理临时文件
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
         if os.path.exists(tmp_dir):
@@ -200,7 +222,9 @@ async def list_published_extensions(
     db: AsyncSession = Depends(get_db),
 ):
     """已发布的自定义扩展列表（仅 is_custom=True）。"""
-    # 预加载 publisher 关系，避免懒加载
+    logger.debug(
+        f"[发布API] 查询已发布扩展 page={page} limit={limit} publisher_id={publisher_id or 'all'}"
+    )
     query = (
         select(Extension)
         .options(selectinload(Extension.publisher))
@@ -259,4 +283,5 @@ async def list_published_extensions(
             "updated_at": ext.updated_at.isoformat() if ext.updated_at else None,
         })
 
+    logger.info(f"[发布API] 返回 {len(data)} 个已发布扩展，总计 {total}")
     return success(data, total)

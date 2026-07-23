@@ -108,11 +108,6 @@ layui.use(['table', 'layer', 'form'], function(){
     html += '<input type="text" name="arch" placeholder="留空=全部，多个用逗号分隔，如：x86_64,aarch64" class="layui-input">';
     html += '<div style="font-size:12px;color:#999;margin-top:5px;">留空表示适用所有架构</div>';
     html += '</div></div>';
-    html += '<div class="layui-form-item" style="margin-bottom:0;">';
-    html += '<div class="layui-input-block">';
-    html += '<button class="layui-btn" lay-submit lay-filter="save-whitelist">保存</button>';
-    html += '<button type="reset" class="layui-btn layui-btn-primary">重置</button>';
-    html += '</div></div>';
     html += '</form>';
     return html;
   }
@@ -123,45 +118,43 @@ layui.use(['table', 'layer', 'form'], function(){
       title: '添加白名单条目',
       content: buildForm(),
       area: ['550px', '380px'],
+      btn: ['保存', '取消'],
       success: function() {
         form.render();
-      }
-    });
-
-    form.on('submit(save-whitelist)', function(data) {
-      var body = {
-        extension_name: data.field.extension_name
-      };
-      // 解析 PG 版本范围
-      if (data.field.postgres_versions) {
-        body.postgres_versions = data.field.postgres_versions.split(',')
-          .map(function(s) { return s.trim(); })
-          .filter(function(s) { return s; });
-      }
-      // 解析架构
-      if (data.field.arch) {
-        body.arch = data.field.arch.split(',')
-          .map(function(s) { return s.trim(); })
-          .filter(function(s) { return s; });
-      }
-      apiFetch('/api/v1/whitelist', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }).then(r => r.json()).then(res => {
-        if (res.code === 0) {
-          layer.closeAll();
-          layer.msg('添加成功', { icon: 1 });
-          table.reload('whitelist-table');
-        } else {
-          layer.msg(res.msg || '添加失败', { icon: 2 });
+      },
+      yes: function(index) {
+        var data = form.val('layui-form');
+        var body = {
+          extension_name: data.extension_name
+        };
+        if (data.postgres_versions) {
+          body.postgres_versions = data.postgres_versions.split(',')
+            .map(function(s) { return s.trim(); })
+            .filter(function(s) { return s; });
         }
-      });
-      return false;
+        if (data.arch) {
+          body.arch = data.arch.split(',')
+            .map(function(s) { return s.trim(); })
+            .filter(function(s) { return s; });
+        }
+        apiFetch('/api/v1/whitelist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).then(r => r.json()).then(res => {
+          if (res.code === 0) {
+            layer.close(index);
+            layer.msg('添加成功', { icon: 1 });
+            table.reload('whitelist-table');
+          } else {
+            layer.msg(res.msg || '添加失败', { icon: 2 });
+          }
+        });
+      }
     });
   };
 
-  // 搜索
+  // 行操作搜索
   document.getElementById('btn-search').onclick = function() {
     var keyword = document.getElementById('search-keyword').value;
     table.reload('whitelist-table', {

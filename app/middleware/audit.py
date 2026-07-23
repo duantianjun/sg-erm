@@ -1,8 +1,10 @@
+﻿# -*- coding: utf-8 -*-
 """审计日志中间件。
 
 自动记录所有 HTTP 请求的关键信息到 audit_log 表。
 可配置跳过某些路径（如静态文件、健康检查）。
 """
+import logging
 import time
 from datetime import datetime
 
@@ -11,6 +13,8 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.models.audit import AuditLog
 from app.services.auth_service import get_current_principal
+
+logger = logging.getLogger(__name__)
 
 # 跳过审计的路径前缀
 SKIP_PATHS = {
@@ -53,18 +57,30 @@ class AuditMiddleware(BaseHTTPMiddleware):
         # 执行请求
         response = await call_next(request)
 
+        duration_ms = int((time.time() - start_time) * 1000)
+
+        # 敏感操作记录到应用日志
+        is_sensitive = any(path.startswith(p) for p in SENSITIVE_PATHS)
+        if is_sensitive or response.status_code >= 400:
+            log_level = logging.WARNING if response.status_code >= 400 else logging.INFO
+            logger.log(
+                log_level,
+                f"[审计] {request.method} {path} status={response.status_code} "
+                f"duration={duration_ms}ms ip={client_ip} actor={actor}"
+            )
+
         # 记录审计日志（如果配置了数据库）
         try:
             await self._log_request(
                 request=request,
                 response=response,
-                duration_ms=int((time.time() - start_time) * 1000),
+                duration_ms=duration_ms,
                 actor=actor,
                 client_ip=client_ip,
             )
-        except Exception:
+        except Exception as e:
             # 审计日志失败不应影响主请求
-            pass
+            logger.debug(f"[审计] 写入审计日志失败（非致命）: {e}")
 
         return response
 

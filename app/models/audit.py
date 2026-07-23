@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """审计日志模型。
 
 记录所有关键操作：sync.start, sync.complete, publish, delete, login, config.change 等。

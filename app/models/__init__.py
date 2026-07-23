@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """SG-ERM ORM 模型包。
 
 导入所有模型类，确保它们在 Base.metadata 中注册。

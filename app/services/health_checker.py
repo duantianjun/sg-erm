@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """仓库源自动健康检查。
 
 定期对所有启用的仓库源发送 HEAD 请求探测 index.json 可达性，
@@ -20,10 +21,12 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session_factory
+from app.logging_config import get_task_logger
 from app.models import RepositorySource
 from app.services.naming import get_index_url
 
 logger = logging.getLogger(__name__)
+task_logger = get_task_logger()
 
 # 连续失败次数阈值，达到后标记为 down
 CONSECUTIVE_FAILURE_THRESHOLD = 3
@@ -85,7 +88,7 @@ async def run_health_check() -> dict:
                 # 从 down 恢复时记录日志
                 if old_status == "down" and status == "healthy":
                     src.last_sync_status = "success"
-                    logger.info(f"源 {source.name} 已恢复健康")
+                    task_logger.info(f"[健康检查] 源 {source.name} 已恢复健康")
 
                 await session.commit()
 
@@ -113,9 +116,14 @@ async def _health_check_loop():
         try:
             result = await run_health_check()
             if result["checked"] > 0:
-                logger.debug(f"健康检查完成: {result['checked']} 个源")
+                healthy = sum(1 for r in result["results"] if r["status"] == "healthy")
+                down = result["checked"] - healthy
+                task_logger.info(
+                    f"[健康检查] 完成 {result['checked']} 个源: "
+                    f"healthy={healthy}, down={down}"
+                )
         except Exception as e:
-            logger.warning(f"健康检查异常: {e}")
+            task_logger.warning(f"[健康检查] 异常: {e}")
 
         await asyncio.sleep(interval)
 
@@ -123,4 +131,4 @@ async def _health_check_loop():
 def start_health_checker():
     """启动后台健康检查任务。"""
     asyncio.create_task(_health_check_loop())
-    logger.info("仓库源健康检查器已启动")
+    task_logger.info("[健康检查] 仓库源健康检查器已启动")

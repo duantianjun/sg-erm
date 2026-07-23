@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """认证服务。
 
 提供 JWT 生成/验证、密码哈希、当前用户获取。
@@ -6,8 +7,13 @@ Phase 1 采用简化方案：
 - 单管理员账号（用户名/密码）
 - JWT 访问令牌（Bearer Token）
 - API Token 用于程序访问（集群认证）
+
+安全特性：
+- JWT 令牌包含 token_version，支持令牌撤销（修改密码时递增）
+- API Token 使用前缀索引优化，避免全表遍历验证
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import logging
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request, status
@@ -21,24 +27,24 @@ from app.config import settings
 from app.database import get_db
 from app.models import ApiToken, User
 
-# 密码哈希
-# 使用 pbkdf2_sha256 替代 bcrypt，避免 Windows 兼容性问题
+logger = logging.getLogger(__name__)
+
 pwd_context = CryptContext(
     schemes=["pbkdf2_sha256"],
     deprecated="auto",
 )
 
-# OAuth2 scheme
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
+
+API_TOKEN_PREFIX = "sgerm_"
+TOKEN_PREFIX_LEN = 8
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """验证密码。"""
     return pwd_context.verify(plain_password, hashed_password)
 
 
 def get_password_hash(password: str) -> str:
-    """生成密码哈希。"""
     return pwd_context.hash(password)
 
 
@@ -46,15 +52,13 @@ def create_access_token(
     data: dict,
     expires_delta: Optional[timedelta] = None,
 ) -> str:
-    """创建 JWT 访问令牌。"""
     to_encode = data.copy()
+    now = datetime.now(timezone.utc)
     if expires_delta:
-        expire = datetime.utcnow() + expires_delta
+        expire = now + expires_delta
     else:
-        expire = datetime.utcnow() + timedelta(
-            minutes=settings.access_token_expire_minutes
-        )
-    to_encode.update({"exp": expire, "type": "access"})
+        expire = now + timedelta(minutes=settings.access_token_expire_minutes)
+    to_encode.update({"exp": expire, "type": "access", "iat": now})
     encoded_jwt = jwt.encode(
         to_encode,
         settings.secret_key,
@@ -64,14 +68,10 @@ def create_access_token(
 
 
 def create_refresh_token(data: dict) -> str:
-    """创建 JWT 刷新令牌。
-
-    刷新令牌有效期 7 天，type 字段为 "refresh"。
-    访问令牌可使用刷新令牌换取新的访问令牌。
-    """
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=7)
-    to_encode.update({"exp": expire, "type": "refresh"})
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(days=7)
+    to_encode.update({"exp": expire, "type": "refresh", "iat": now})
     encoded_jwt = jwt.encode(
         to_encode,
         settings.secret_key,
@@ -84,10 +84,6 @@ async def get_current_user(
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
-    """从 JWT 令牌获取当前用户。
-
-    返回 None 表示未认证（用于可选认证场景）。
-    """
     if not token:
         return None
 
@@ -98,15 +94,30 @@ async def get_current_user(
             algorithms=[settings.jwt_algorithm],
         )
         user_id: str = payload.get("sub")
+        token_version: int = payload.get("token_version", 0)
         if user_id is None:
+            logger.debug("[认证] JWT 缺少 sub 字段")
             return None
-    except JWTError:
+    except JWTError as e:
+        logger.debug(f"[认证] JWT 解码失败: {e}")
         return None
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if user and not user.is_active:
+    if not user:
+        logger.debug(f"[认证] 用户不存在 user_id={user_id}")
         return None
+    if not user.is_active:
+        logger.warning(f"[认证] 用户已禁用 user_id={user_id} username={user.username}")
+        return None
+
+    if token_version != user.token_version:
+        logger.warning(
+            f"[认证] JWT token_version 不匹配 user_id={user_id} username={user.username} "
+            f"jwt_ver={token_version} db_ver={user.token_version}"
+        )
+        return None
+
     return user
 
 
@@ -114,10 +125,6 @@ async def require_auth(
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """强制认证：未登录返回 401。
-
-    用于需要登录的 API 端点。
-    """
     user = await get_current_user(token, db)
     if not user:
         raise HTTPException(
@@ -132,10 +139,6 @@ async def require_admin(
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    """强制管理员权限。
-
-    用于管理操作（删除、配置变更等）。
-    """
     user = await require_auth(token, db)
     if not user.is_admin:
         raise HTTPException(
@@ -150,35 +153,50 @@ async def authenticate_user(
     username: str,
     password: str,
 ) -> Optional[User]:
-    """验证用户名密码。"""
     result = await db.execute(select(User).where(User.username == username))
     user = result.scalar_one_or_none()
     if not user:
+        logger.warning(f"[认证] 登录失败：用户不存在 username={username}")
         return None
     if not verify_password(password, user.password_hash):
+        logger.warning(f"[认证] 登录失败：密码错误 username={username}")
         return None
+    logger.info(f"[认证] 登录成功 username={username} user_id={user.id}")
     return user
 
 
-# ─── API Token 认证 ──────────────────────────────────
-
-API_TOKEN_PREFIX = "sgerm_"
+async def increment_token_version(
+    db: AsyncSession,
+    user_id: str,
+) -> None:
+    """递增用户的 token_version，使所有旧令牌失效。"""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if user:
+        user.token_version += 1
+        await db.commit()
+        logger.info(
+            f"[认证] 递增 token_version user_id={user_id} username={user.username} "
+            f"new_version={user.token_version}"
+        )
 
 
 def generate_api_token() -> str:
-    """生成随机 API Token 明文。"""
     import secrets
 
     return API_TOKEN_PREFIX + secrets.token_urlsafe(32)
 
 
+def get_token_prefix(token: str) -> str:
+    """提取令牌前缀（用于索引查询）。"""
+    return token[len(API_TOKEN_PREFIX) : len(API_TOKEN_PREFIX) + TOKEN_PREFIX_LEN]
+
+
 def hash_api_token(token: str) -> str:
-    """哈希 API Token。"""
     return pwd_context.hash(token)
 
 
 def verify_api_token(token: str, token_hash: str) -> bool:
-    """验证 API Token。"""
     return pwd_context.verify(token, token_hash)
 
 
@@ -189,13 +207,12 @@ async def get_api_token_auth(
     """从请求头中获取并验证 API Token。
 
     支持 X-API-Token 头或 Authorization: Bearer <token>。
+    使用 token_prefix 索引优化查询，避免全表遍历。
     """
     token = None
 
-    # 优先检查 X-API-Token
     token = request.headers.get("X-API-Token")
     if not token:
-        # 检查 Authorization: Bearer <token>
         auth = request.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             token = auth[7:]
@@ -203,20 +220,32 @@ async def get_api_token_auth(
     if not token or not token.startswith(API_TOKEN_PREFIX):
         return None
 
-    # 查找匹配的 token hash
-    result = await db.execute(select(ApiToken))
+    token_prefix = get_token_prefix(token)
+
+    result = await db.execute(
+        select(ApiToken).where(ApiToken.token_prefix == token_prefix)
+    )
     tokens = result.scalars().all()
+
+    if not tokens:
+        logger.debug(f"[认证] 未找到匹配 prefix 的 API Token prefix={token_prefix}")
+        return None
 
     for api_token in tokens:
         if verify_api_token(token, api_token.token_hash):
-            # 检查是否过期
-            if api_token.expires_at and api_token.expires_at < datetime.utcnow():
+            if api_token.expires_at and api_token.expires_at < datetime.now(timezone.utc):
+                logger.warning(
+                    f"[认证] API Token 已过期 token_id={api_token.id} name={api_token.name}"
+                )
                 return None
-            # 更新最后使用时间
-            api_token.last_used_at = datetime.utcnow()
+            api_token.last_used_at = datetime.now(timezone.utc)
             await db.commit()
+            logger.debug(
+                f"[认证] API Token 验证通过 token_id={api_token.id} name={api_token.name}"
+            )
             return api_token
 
+    logger.warning(f"[认证] API Token 验证失败 prefix={token_prefix} candidates={len(tokens)}")
     return None
 
 
@@ -225,12 +254,6 @@ async def get_current_principal(
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[dict]:
-    """获取当前认证主体（用户或 API Token）。
-
-    返回 dict: {"type": "user"|"token", "id": ..., "name": ..., "is_admin": bool}
-    或 None（未认证）。
-    """
-    # 先尝试 JWT 用户认证
     user = await get_current_user(token, db)
     if user:
         return {
@@ -240,7 +263,6 @@ async def get_current_principal(
             "is_admin": user.is_admin,
         }
 
-    # 再尝试 API Token
     api_token = await get_api_token_auth(request, db)
     if api_token:
         return {

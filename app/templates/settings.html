@@ -130,15 +130,20 @@ layui.use(['layer', 'form'], function(){
     html += '<div class="layui-input-block"><input type="password" name="old_password" required lay-verify="required" class="layui-input" id="pwd-old"></div></div>';
     html += '<div class="layui-form-item"><label class="layui-form-label">新密码</label>';
     html += '<div class="layui-input-block"><input type="password" name="new_password" required lay-verify="required" class="layui-input" id="pwd-new"></div></div>';
-    html += '<div class="layui-form-item" style="margin-bottom:0;"><div class="layui-input-block">';
-    html += '<button type="button" class="layui-btn" id="pwd-submit">确认修改</button>';
-    html += '</div></div>';
     html += '</form>';
 
-    var idx = layer.open({ title: '修改密码', content: html, area: ['420px', '260px'], success: function(){
-      document.getElementById('pwd-submit').onclick = function() {
-        var oldPwd = document.getElementById('pwd-old').value.trim();
-        var newPwd = document.getElementById('pwd-new').value.trim();
+    var idx = layer.open({ 
+      title: '修改密码', 
+      content: html, 
+      area: ['420px', '260px'],
+      btn: ['确认修改', '取消'],
+      success: function(){
+        form.render();
+      },
+      yes: function(index) {
+        var data = form.val('pwd-form');
+        var oldPwd = data.old_password || '';
+        var newPwd = data.new_password || '';
         if (!oldPwd || !newPwd) {
           layer.msg('请填写完整', { icon: 2 });
           return;
@@ -149,7 +154,7 @@ layui.use(['layer', 'form'], function(){
           body: JSON.stringify({ old_password: oldPwd, new_password: newPwd })
         }).then(function(r) { return r.json(); }).then(function(res) {
           if (res.code === 0) {
-            layer.close(idx);
+            layer.close(index);
             layer.msg('密码修改成功，请重新登录', { icon: 1, time: 2000 }, function() {
               doLogout();
             });
@@ -157,8 +162,8 @@ layui.use(['layer', 'form'], function(){
             layer.msg(res.msg || '修改失败', { icon: 2 });
           }
         });
-      };
-    }});
+      }
+    });
   };
 });
 </script>

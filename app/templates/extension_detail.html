@@ -4,7 +4,7 @@
 
 {% block content %}
 <div class="page-title">
-  <a href="/extensions" style="color:#1e9fff;text-decoration:none;"><i class="layui-icon layui-icon-return"></i> 扩展目录</a>
+  <a href="/extensions" style="color:#1e9fff;text-decoration:none;"><i class="layui-icon layui-icon-return"></i> 扩展管理</a>
   <span style="margin:0 8px;color:#ccc;">/</span>
   <span id="ext-name-display">{{ ext_name }}</span>
 </div>
@@ -18,10 +18,12 @@
 
 {% block extra_script %}
 <script>
-layui.use(['element'], function(){
+layui.use(['element', 'layer'], function(){
+  var layer = layui.layer;
   var extName = '{{ ext_name }}';
+  var selectedBuildIds = [];
 
-  fetch('/api/v1/extensions/' + encodeURIComponent(extName)).then(r => r.json()).then(res => {
+  apiFetch('/api/v1/extensions/' + encodeURIComponent(extName)).then(r => r.json()).then(res => {
     var container = document.getElementById('ext-detail-container');
     if (res.code !== 0 || !res.data || res.data.length === 0) {
       container.innerHTML = '<div class="sg-card placeholder"><h2>扩展不存在</h2><p>未找到名为 "' + extName + '" 的扩展。</p></div>';
@@ -47,6 +49,14 @@ layui.use(['element'], function(){
       }).join(' ') + '</div>';
     }
 
+    function formatSize(bytes) {
+      if (!bytes || bytes <= 0) return '-';
+      if (bytes < 1024) return bytes + ' B';
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + ' KB';
+      if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(2) + ' MB';
+      return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
+    }
+
     var versionsHtml = '';
     if (ext.versions && ext.versions.length > 0) {
       ext.versions.forEach(function(ver) {
@@ -54,23 +64,32 @@ layui.use(['element'], function(){
         versionsHtml += '<div style="font-weight:600;font-size:15px;margin-bottom:8px;">版本 ' + ver.version + ' <span style="font-size:12px;color:#999;">(' + ver.channel + ')</span></div>';
         if (ver.builds && ver.builds.length > 0) {
           versionsHtml += '<table class="layui-table" style="margin:0;">';
-          versionsHtml += '<thead><tr><th>PG 版本</th><th>架构</th><th>OS</th><th>风味</th><th>构建号</th><th>包大小</th><th>状态</th></tr></thead>';
+          versionsHtml += '<thead><tr><th><input type="checkbox" lay-skin="primary" onchange="window._toggleVersionBuilds(this, ' + JSON.stringify(ver.builds.map(function(b){return b.build_id;})) + ')"></th><th>PG 版本</th><th>架构</th><th>OS</th><th>风味</th><th>构建号</th><th>包大小</th><th>SHA256</th><th>状态</th><th>操作</th></tr></thead>';
           versionsHtml += '<tbody>';
           ver.builds.forEach(function(b) {
-            var size = b.package_size ? (b.package_size / 1024 / 1024).toFixed(2) + ' MB' : '-';
+            var size = formatSize(b.package_size);
             var cached = b.cached ? '<span class="layui-badge layui-bg-green">已缓存</span>' : '<span class="layui-badge layui-bg-gray">未缓存</span>';
             var verified = b.verified ? '<span class="layui-badge layui-bg-blue">已签名</span>' : '';
+            var shaDisplay = b.sha256 ? '<span title="' + b.sha256 + '">' + b.sha256.substring(0, 12) + '...</span>' : '<span style="color:#999;">-</span>';
             versionsHtml += '<tr>';
+            versionsHtml += '<td><input type="checkbox" lay-skin="primary" value="' + b.build_id + '" onchange="window._toggleBuild(this, \'' + b.build_id + '\')"></td>';
             versionsHtml += '<td>' + b.postgres_version + '</td>';
             versionsHtml += '<td>' + b.arch + '</td>';
             versionsHtml += '<td>' + b.os + '</td>';
             versionsHtml += '<td>' + b.flavor + '</td>';
             versionsHtml += '<td>' + (b.build || '-') + '</td>';
             versionsHtml += '<td>' + size + '</td>';
+            versionsHtml += '<td style="font-size:12px;">' + shaDisplay + '</td>';
             versionsHtml += '<td>' + cached + ' ' + verified + '</td>';
+            versionsHtml += '<td>';
+            versionsHtml += '<button class="layui-btn layui-btn-xs" onclick="window._verifyBuild(\'' + b.build_id + '\', this)">验证</button> ';
+            versionsHtml += '<button class="layui-btn layui-btn-xs layui-btn-normal" onclick="window._redownloadBuild(\'' + b.build_id + '\', this)">重下载</button> ';
+            versionsHtml += '<button class="layui-btn layui-btn-xs layui-btn-danger" onclick="window._deleteBuild(\'' + b.build_id + '\', this)">删除</button>';
+            versionsHtml += '</td>';
             versionsHtml += '</tr>';
           });
           versionsHtml += '</tbody></table>';
+          versionsHtml += '<div style="margin-top:8px;"><button class="layui-btn layui-btn-xs layui-btn-danger" onclick="window._batchDeleteBuilds(\'' + ext.name + '\')"><i class="layui-icon layui-icon-delete"></i> 批量删除选中构建</button></div>';
         } else {
           versionsHtml += '<p style="color:#999;font-size:13px;">暂无构建信息</p>';
         }
@@ -110,6 +129,97 @@ layui.use(['element'], function(){
   }).catch(function(err) {
     document.getElementById('ext-detail-container').innerHTML = '<div class="sg-card placeholder"><h2>加载失败</h2><p>' + err + '</p></div>';
   });
+
+  // ─── 构建操作 ──────────────────────────────────────
+
+  window._toggleBuild = function(cb, buildId) {
+    if (cb.checked) {
+      if (selectedBuildIds.indexOf(buildId) === -1) selectedBuildIds.push(buildId);
+    } else {
+      selectedBuildIds = selectedBuildIds.filter(function(id) { return id !== buildId; });
+    }
+  };
+
+  window._toggleVersionBuilds = function(cb, buildIds) {
+    buildIds.forEach(function(bid) {
+      if (cb.checked) {
+        if (selectedBuildIds.indexOf(bid) === -1) selectedBuildIds.push(bid);
+      } else {
+        selectedBuildIds = selectedBuildIds.filter(function(id) { return id !== bid; });
+      }
+    });
+    // 同步该版本下所有 checkbox 的状态
+    document.querySelectorAll('input[type="checkbox"][value]').forEach(function(el) {
+      if (buildIds.indexOf(el.value) !== -1) el.checked = cb.checked;
+    });
+  };
+
+  window._verifyBuild = function(buildId, btn) {
+    btn.disabled = true; btn.textContent = '验证中...';
+    apiFetch('/api/v1/repo-files/packages/' + buildId + '/verify', { method: 'POST' })
+      .then(function(r) { return r.json(); }).then(function(res) {
+        btn.disabled = false; btn.textContent = '验证';
+        if (res.code === 0) {
+          var d = res.data[0] || {};
+          layer.msg(res.msg || (d.matched ? 'SHA256 匹配' : 'SHA256 不匹配'), { icon: d.matched ? 1 : 2 });
+        } else { layer.msg(res.msg || '验证失败', { icon: 2 }); }
+      }).catch(function(err) {
+        btn.disabled = false; btn.textContent = '验证';
+        layer.msg('验证失败: ' + err.message, { icon: 2 });
+      });
+  };
+
+  window._redownloadBuild = function(buildId, btn) {
+    btn.disabled = true; btn.innerHTML = '<i class="layui-icon layui-icon-loading-1"></i> 下载中';
+    apiFetch('/api/v1/repo-files/packages/' + buildId + '/redownload', { method: 'POST' })
+      .then(function(r) { return r.json(); }).then(function(res) {
+        btn.disabled = false; btn.textContent = '重下载';
+        if (res.code === 0) { layer.msg('重新下载成功', { icon: 1 }); location.reload(); }
+        else { layer.msg(res.msg || '重新下载失败', { icon: 2 }); }
+      }).catch(function(err) {
+        btn.disabled = false; btn.textContent = '重下载';
+        layer.msg('重新下载失败: ' + err.message, { icon: 2 });
+      });
+  };
+
+  window._deleteBuild = function(buildId, btn) {
+    layer.confirm('确定删除此构建包？将删除磁盘文件和数据库记录。', { title: '确认删除' }, function(index) {
+      layer.close(index);
+      var loadIdx = layer.load(2, { shade: [0.3, '#000'] });
+      apiFetch('/api/v1/repo-files/packages/' + buildId, { method: 'DELETE' })
+        .then(function(r) { return r.json(); }).then(function(res) {
+          layer.close(loadIdx);
+          if (res.code === 0) { layer.msg('已删除', { icon: 1 }); location.reload(); }
+          else { layer.msg(res.msg || '删除失败', { icon: 2 }); }
+        }).catch(function(err) {
+          layer.close(loadIdx);
+          layer.msg('删除失败: ' + err.message, { icon: 2 });
+        });
+    });
+  };
+
+  window._batchDeleteBuilds = function(extName) {
+    if (selectedBuildIds.length === 0) {
+      layer.msg('请先勾选要删除的构建', { icon: 0 });
+      return;
+    }
+    layer.confirm('确定删除选中的 ' + selectedBuildIds.length + ' 个构建包？将删除磁盘文件和数据库记录。', { title: '确认批量删除' }, function(index) {
+      layer.close(index);
+      var loadIdx = layer.load(2, { shade: [0.3, '#000'] });
+      apiFetch('/api/v1/extensions/' + encodeURIComponent(extName) + '/builds/batch', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ build_ids: selectedBuildIds })
+      }).then(function(r) { return r.json(); }).then(function(res) {
+        layer.close(loadIdx);
+        if (res.code === 0) { layer.msg(res.msg || '删除成功', { icon: 1 }); location.reload(); }
+        else { layer.msg(res.msg || '删除失败', { icon: 2 }); }
+      }).catch(function(err) {
+        layer.close(loadIdx);
+        layer.msg('删除失败: ' + err.message, { icon: 2 });
+      });
+    });
+  };
 });
 </script>
 {% endblock %}

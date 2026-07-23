@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """异步同步引擎。
 
 核心流程：
@@ -12,7 +13,7 @@
 import asyncio
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
@@ -20,6 +21,7 @@ import aiohttp
 
 from app.config import settings
 from app.database import async_session_factory
+from app.logging_config import get_task_logger
 from app.models import (
     Extension,
     ExtensionBuild,
@@ -42,6 +44,7 @@ from app.services.naming import (
 )
 
 logger = logging.getLogger(__name__)
+task_logger = get_task_logger()
 
 # 进度回调类型
 ProgressCallback = Callable[[dict], Coroutine[Any, Any, None]]
@@ -100,12 +103,14 @@ class SyncEngine:
                 source_id=source_id,
                 policy_id=policy_id,
                 status="running",
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
             )
             session.add(task)
             await session.commit()
             await session.refresh(task)
             task_id = task.id
+
+        task_logger.info(f"[同步任务] 启动 task_id={task_id} source={source.name} dry_run={dry_run}")
 
         # 在后台运行实际同步
         coro = self._execute(task_id, source_id, policy_id, dry_run)
@@ -172,7 +177,7 @@ class SyncEngine:
                         status="completed",
                         downloaded=0,
                         skipped=total,
-                        finished_at=datetime.utcnow(),
+                        finished_at=datetime.now(timezone.utc),
                         diff_summary={"dry_run": True, "packages": total, "removed": 0},
                     )
                     await self._notify({
@@ -211,7 +216,7 @@ class SyncEngine:
                     downloaded=downloaded,
                     failed=failed,
                     skipped=skipped,
-                    finished_at=datetime.utcnow(),
+                    finished_at=datetime.now(timezone.utc),
                     diff_summary={
                         "total": total,
                         "downloaded": downloaded,
@@ -222,8 +227,13 @@ class SyncEngine:
                 )
 
                 # 更新源同步状态
-                source.last_sync = datetime.utcnow()
+                source.last_sync = datetime.now(timezone.utc)
                 source.last_sync_status = "success"
+
+                task_logger.info(
+                    f"[同步任务] 完成 task_id={task_id} "
+                    f"total={total} downloaded={downloaded} failed={failed} skipped={skipped} removed={removed}"
+                )
 
                 await self._notify({
                     "type": "complete",
@@ -236,19 +246,21 @@ class SyncEngine:
                 })
 
         except asyncio.CancelledError:
+            task_logger.warning(f"[同步任务] 取消 task_id={task_id}")
             async with self.session_factory() as session:
                 task = await session.get(SyncTask, task_id)
                 if task:
                     await self._update_task(
                         session, task,
                         status="cancelled",
-                        finished_at=datetime.utcnow(),
+                        finished_at=datetime.now(timezone.utc),
                     )
                 await self._notify({"type": "cancelled", "task_id": task_id})
             raise
 
         except Exception as e:
             logger.exception(f"同步任务 {task_id} 失败")
+            task_logger.error(f"[同步任务] 失败 task_id={task_id}: {e}", exc_info=True)
             async with self.session_factory() as session:
                 task = await session.get(SyncTask, task_id)
                 source = await session.get(RepositorySource, source_id)
@@ -257,10 +269,10 @@ class SyncEngine:
                         session, task,
                         status="failed",
                         error_message=str(e),
-                        finished_at=datetime.utcnow(),
+                        finished_at=datetime.now(timezone.utc),
                     )
                 if source:
-                    source.last_sync = datetime.utcnow()
+                    source.last_sync = datetime.now(timezone.utc)
                     source.last_sync_status = "failed"
                 await session.commit()
             await self._notify({
@@ -289,6 +301,10 @@ class SyncEngine:
 
         1. 如果有 policy_id，从 SyncPolicy.filters 读取策略级过滤器；
         2. 合并全局白名单作为扩展 include 基线。
+
+        安全规则：
+        - 如果白名单为空，拒绝同步（安全默认）
+        - 白名单查询失败时，拒绝同步
         """
         filters = {}
         if policy_id:
@@ -298,11 +314,21 @@ class SyncEngine:
                 filters = dict(policy.filters)
 
         # 合并全局白名单为 extensions.include 基线
-        wl_result = await session.execute(
-            select(GlobalWhitelist.extension_name)
-        )
-        wl_names = [row[0] for row in wl_result.all()]
-        if wl_names:
+        try:
+            wl_result = await session.execute(
+                select(GlobalWhitelist.extension_name)
+            )
+            wl_names = [row[0] for row in wl_result.all()]
+
+            # 安全检查：白名单为空时拒绝同步
+            if not wl_names:
+                logger.error(
+                    "[安全] 全局白名单为空，拒绝同步任务。"
+                    "请先在白名单中添加扩展名称。"
+                )
+                # 返回一个包含空 include 的过滤器，确保不会同步任何包
+                return {"extensions": {"include": []}}
+
             ext_filters = filters.setdefault("extensions", {})
             wl_set = set(wl_names)
             existing_include = set(ext_filters.get("include", []))
@@ -314,6 +340,17 @@ class SyncEngine:
                 merged = wl_set
             if merged:
                 ext_filters["include"] = sorted(merged)
+            else:
+                # 交集为空，说明策略级过滤器与白名单冲突
+                logger.warning(
+                    f"[安全] 策略级 include {existing_include} 与白名单 {wl_set} 无交集，"
+                    "将不同步任何包"
+                )
+                ext_filters["include"] = []
+
+        except Exception as e:
+            logger.error(f"[安全] 查询全局白名单失败: {e}，拒绝同步任务")
+            return {"extensions": {"include": []}}
 
         return filters
 

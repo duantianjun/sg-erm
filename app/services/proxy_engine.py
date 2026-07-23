@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """混合模式代理引擎。
 
 核心流程（设计文档 5.5）：
@@ -14,7 +15,7 @@
 - proxy_only: 不预同步，按需代理（永远 MISS → 拉取）
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -23,12 +24,14 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session_factory
-from app.models import ExtensionBuild, RepositorySource
+from app.models import Extension, ExtensionBuild, ExtensionVersion, Publisher, RepositorySource
 from app.services.naming import (
     INDEX_PATH,
     get_index_url,
     get_local_path,
     get_package_url,
+    parse_package_name,
+    validate_path_segment,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,7 +72,15 @@ class ProxyEngine:
             (file_path, status): file_path 为 None 时表示 404
                                  status 为 HIT/MISS/404
         """
-        # 构造本地路径
+        if not all([
+            validate_path_segment(publisher),
+            validate_path_segment(arch),
+            validate_path_segment(os_name),
+            validate_path_segment(package_name),
+        ]):
+            logger.warning(f"路径段验证失败: publisher={publisher}, arch={arch}, os={os_name}, package={package_name}")
+            return None, NOT_FOUND
+
         relative_path = get_local_path(publisher, arch, os_name, package_name)
         local_path = self.config.repo_dir / relative_path
 
@@ -269,7 +280,7 @@ class ProxyEngine:
                 )
                 build = result.scalar_one_or_none()
                 if build:
-                    build.last_accessed = datetime.utcnow()
+                    build.last_accessed = datetime.now(timezone.utc)
                     await session.commit()
         except Exception as e:
             logger.debug(f"更新访问时间失败（非致命）: {e}")
@@ -281,7 +292,11 @@ class ProxyEngine:
         os_name: str,
         package_name: str,
     ) -> None:
-        """在数据库中标记包为已缓存。"""
+        """在数据库中标记包为已缓存。
+
+        如果数据库中没有对应记录，则从包名解析信息并创建完整的三层记录：
+        Publisher -> Extension -> ExtensionVersion -> ExtensionBuild
+        """
         try:
             relative_path = get_local_path(publisher, arch, os_name, package_name)
             async with self.session_factory() as session:
@@ -291,17 +306,78 @@ class ProxyEngine:
                     )
                 )
                 build = result.scalar_one_or_none()
+
                 if build:
                     build.cached = True
-                    build.last_accessed = datetime.utcnow()
+                    build.last_accessed = datetime.now(timezone.utc)
                     if build.package_size is None:
-                        # 更新文件大小
                         local_file = self.config.repo_dir / relative_path
                         if local_file.exists():
                             build.package_size = local_file.stat().st_size
                     await session.commit()
+                    return
+
+                ext_info = parse_package_name(package_name)
+                if not ext_info:
+                    logger.warning(f"无法解析包名: {package_name}")
+                    return
+
+                pub_result = await session.execute(
+                    select(Publisher).where(Publisher.name == publisher)
+                )
+                pub = pub_result.scalar_one_or_none()
+                if not pub:
+                    pub = Publisher(name=publisher, display_name=publisher)
+                    session.add(pub)
+                    await session.flush()
+
+                ext_result = await session.execute(
+                    select(Extension).where(Extension.name == ext_info["name"])
+                )
+                ext = ext_result.scalar_one_or_none()
+                if not ext:
+                    ext = Extension(name=ext_info["name"], publisher_id=pub.id)
+                    session.add(ext)
+                    await session.flush()
+
+                ver_result = await session.execute(
+                    select(ExtensionVersion).where(
+                        ExtensionVersion.extension_id == ext.id,
+                        ExtensionVersion.version == ext_info["version"],
+                    )
+                )
+                ver = ver_result.scalar_one_or_none()
+                if not ver:
+                    ver = ExtensionVersion(
+                        extension_id=ext.id,
+                        version=ext_info["version"],
+                        channel="stable",
+                    )
+                    session.add(ver)
+                    await session.flush()
+
+                local_file = self.config.repo_dir / relative_path
+                package_size = local_file.stat().st_size if local_file.exists() else None
+
+                new_build = ExtensionBuild(
+                    version_id=ver.id,
+                    postgres_version=ext_info["postgres_version"],
+                    arch=arch,
+                    os=os_name,
+                    flavor=ext_info["flavor"],
+                    build=ext_info["build"],
+                    package_path=relative_path,
+                    package_size=package_size,
+                    cached=True,
+                    last_accessed=datetime.now(timezone.utc),
+                )
+                session.add(new_build)
+                await session.commit()
+
+                logger.info(f"[代理] 创建数据库记录: {relative_path}")
+
         except Exception as e:
-            logger.debug(f"标记缓存失败（非致命）: {e}")
+            logger.warning(f"标记缓存失败（非致命）: {e}")
 
 
 # 全局单例

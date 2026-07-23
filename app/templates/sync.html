@@ -111,26 +111,29 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
       html += '</select></div></div>';
       html += '<div class="layui-form-item"><label class="layui-form-label">模拟运行</label><div class="layui-input-block">';
       html += '<input type="checkbox" name="dry_run" lay-skin="switch" lay-text="是|否"></div></div>';
-      html += '<div class="layui-form-item" style="margin-bottom:0;"><div class="layui-input-block">';
-      html += '<button class="layui-btn" lay-submit lay-filter="trigger-sync">开始同步</button></div></div>';
       html += '</form>';
-      layer.open({ title: '触发同步', content: html, area: ['500px', '300px'], success: function() { form.render(); }});
-
-      form.on('submit(trigger-sync)', function(data) {
-        apiFetch('/api/v1/sync/trigger', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ source_id: data.field.source_id, dry_run: data.field.dry_run === 'on' })
-        }).then(r => r.json()).then(res => {
-          if (res.code === 0) {
-            layer.closeAll();
-            layer.msg('同步任务已启动', { icon: 1 });
-            setTimeout(function() { table.reload('sync-tasks-table'); }, 3000);
-          } else {
-            layer.msg(res.msg || '启动失败', { icon: 2 });
-          }
-        });
-        return false;
+      layer.open({ 
+        title: '触发同步', 
+        content: html, 
+        area: ['500px', '300px'], 
+        btn: ['开始同步', '取消'],
+        success: function() { form.render(); },
+        yes: function(index) {
+          var data = form.val('layui-form');
+          apiFetch('/api/v1/sync/trigger', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source_id: data.source_id, dry_run: data.dry_run === 'on' })
+          }).then(r => r.json()).then(res => {
+            if (res.code === 0) {
+              layer.close(index);
+              layer.msg('同步任务已启动', { icon: 1 });
+              setTimeout(function() { table.reload('sync-tasks-table'); }, 3000);
+            } else {
+              layer.msg(res.msg || '启动失败', { icon: 2 });
+            }
+          });
+        }
       });
     });
   };
@@ -302,11 +305,6 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
     html += '<textarea name="filter_exclude" placeholder="每行一个扩展名" class="layui-textarea" rows="4">' + ((ext.exclude || []).join('\n')) + '</textarea>';
     html += '</div></div>';
     html += '</div>';
-
-    // 提交
-    html += '<div class="layui-form-item" style="margin-bottom:0;"><div class="layui-input-block">';
-    html += '<button class="layui-btn" lay-submit lay-filter="save-policy">' + (isEdit ? '保存' : '创建') + '</button>';
-    html += '</div></div>';
     html += '</form>';
     return html;
   }
@@ -323,13 +321,12 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
         title: data && data.id ? '编辑策略' : '新建策略',
         content: html,
         area: ['650px', '580px'],
+        btn: [(data && data.id ? '保存' : '创建'), '取消'],
         success: function() {
           form.render();
-          // 回填 checkbox
           var f = (data && data.filters) || {};
           setChecked('filter_arch', f.arch || ['x86_64']);
           setChecked('filter_os', f.os || ['linux']);
-          // 初始化 cron 组件（按需加载，避免影响页面加载）
           layui.use(['cron'], function(){
             var cronInst = layui.cron;
             var cronInput = document.getElementById('policy-cron-input');
@@ -346,11 +343,53 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
               });
             };
             renderCron();
-            // 齿轮按钮也能触发
             document.getElementById('policy-cron-btn').onclick = function() {
               cronInput.focus();
               cronInput.click();
             };
+          });
+        },
+        yes: function(index) {
+          var field = form.val('policy-form');
+          var includeArr = (field.filter_include || '').split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+          var excludeArr = (field.filter_exclude || '').split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+          var publisherArr = (field.filter_publisher || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+          var filters = {
+            arch: checkedVals('filter_arch'),
+            os: checkedVals('filter_os')
+          };
+          if (publisherArr.length) filters.publisher = publisherArr;
+          if (includeArr.length) filters.extensions = { include: includeArr, exclude: excludeArr };
+          else if (excludeArr.length) filters.extensions = { include: [], exclude: excludeArr };
+          if (field.filter_pg_version) filters.postgresVersion = field.filter_pg_version;
+          if (field.filter_channel) filters.channel = field.filter_channel;
+          if (field.filter_build) filters.build = field.filter_build;
+
+          var body = {
+            name: field.name,
+            source_id: field.source_id,
+            schedule: field.schedule || null,
+            enabled: field.enabled === 'on',
+            keep_old_versions: parseInt(field.keep_old_versions) || 3,
+            filters: filters
+          };
+
+          var id = field.id;
+          var url = id ? '/api/v1/sync/policies/' + id : '/api/v1/sync/policies';
+          var method = id ? 'PUT' : 'POST';
+
+          apiFetch(url, {
+            method: method,
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          }).then(r => r.json()).then(res => {
+            if (res.code === 0) {
+              layer.close(index);
+              layer.msg(id ? '保存成功' : '创建成功', { icon: 1 });
+              table.reload('sync-policies-table');
+            } else {
+              layer.msg(res.msg || '操作失败', { icon: 2 });
+            }
           });
         }
       });
@@ -361,55 +400,6 @@ layui.use(['table', 'layer', 'form', 'element'], function(){
   document.getElementById('btn-add-policy').onclick = function() {
     openPolicyForm();
   };
-
-  // 保存策略
-  form.on('submit(save-policy)', function(data) {
-    var field = data.field;
-
-    // 构造 filters 对象
-    var includeArr = (field.filter_include || '').split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
-    var excludeArr = (field.filter_exclude || '').split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
-    var publisherArr = (field.filter_publisher || '').split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-
-    var filters = {
-      arch: checkedVals('filter_arch'),
-      os: checkedVals('filter_os')
-    };
-    if (publisherArr.length) filters.publisher = publisherArr;
-    if (includeArr.length) filters.extensions = { include: includeArr, exclude: excludeArr };
-    else if (excludeArr.length) filters.extensions = { include: [], exclude: excludeArr };
-    if (field.filter_pg_version) filters.postgresVersion = field.filter_pg_version;
-    if (field.filter_channel) filters.channel = field.filter_channel;
-    if (field.filter_build) filters.build = field.filter_build;
-
-    var body = {
-      name: field.name,
-      source_id: field.source_id,
-      schedule: field.schedule || null,
-      enabled: field.enabled === 'on',
-      keep_old_versions: parseInt(field.keep_old_versions) || 3,
-      filters: filters
-    };
-
-    var id = field.id;
-    var url = id ? '/api/v1/sync/policies/' + id : '/api/v1/sync/policies';
-    var method = id ? 'PUT' : 'POST';
-
-    apiFetch(url, {
-      method: method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
-    }).then(r => r.json()).then(res => {
-      if (res.code === 0) {
-        layer.closeAll();
-        layer.msg(id ? '保存成功' : '创建成功', { icon: 1 });
-        table.reload('sync-policies-table');
-      } else {
-        layer.msg(res.msg || '操作失败', { icon: 2 });
-      }
-    });
-    return false;
-  });
 
   // 策略行操作
   table.on('tool(sync-policies-table)', function(obj) {

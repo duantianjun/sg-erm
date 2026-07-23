@@ -1,7 +1,10 @@
+﻿# -*- coding: utf-8 -*-
 """同步任务 API。
 
 提供同步任务的触发、取消、列表和详情查询。
 """
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import func, select
@@ -12,6 +15,8 @@ from app.database import get_db
 from app.models import RepositorySource, SyncPolicy, SyncTask, User
 from app.services.auth_service import require_admin
 from app.services.sync_engine import sync_engine
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/sync",
@@ -36,6 +41,10 @@ async def list_tasks(
     db: AsyncSession = Depends(get_db),
 ):
     """同步任务列表。"""
+    logger.debug(
+        f"[同步API] 查询任务列表 page={page} limit={limit} "
+        f"status={status or 'all'} source_id={source_id or 'all'}"
+    )
     query = select(SyncTask).order_by(SyncTask.started_at.desc())
 
     if status:
@@ -73,14 +82,17 @@ async def list_tasks(
             "finished_at": t.finished_at.isoformat() if t.finished_at else None,
         })
 
+    logger.info(f"[同步API] 返回 {len(data)} 个任务，总计 {total}")
     return success(data, total)
 
 
 @router.get("/tasks/{task_id}")
 async def get_task(task_id: str, db: AsyncSession = Depends(get_db)):
     """同步任务详情。"""
+    logger.debug(f"[同步API] 查询任务详情 task_id={task_id}")
     task = await db.get(SyncTask, task_id)
     if not task:
+        logger.warning(f"[同步API] 任务不存在 task_id={task_id}")
         return error_response("任务不存在", status_code=404)
 
     source = await db.get(RepositorySource, task.source_id)
@@ -112,21 +124,26 @@ async def trigger_sync(
     db: AsyncSession = Depends(get_db),
 ):
     """触发同步任务。"""
-    # 验证仓库源存在
+    logger.info(
+        f"[同步API] 触发同步 source_id={body.source_id} "
+        f"policy_id={body.policy_id} dry_run={body.dry_run}"
+    )
     source = await db.get(RepositorySource, body.source_id)
     if not source:
+        logger.warning(f"[同步API] 触发失败：仓库源不存在 source_id={body.source_id}")
         return error_response("仓库源不存在", status_code=404)
 
     if not source.enabled:
+        logger.warning(f"[同步API] 触发失败：仓库源已禁用 source_id={body.source_id}")
         return error_response("仓库源已禁用")
 
-    # 触发同步
     task = await sync_engine.run(
         source_id=body.source_id,
         policy_id=body.policy_id,
         dry_run=body.dry_run,
     )
 
+    logger.info(f"[同步API] 同步任务已启动 task_id={task.id} source_name={source.name}")
     return success({
         "task_id": task.id,
         "status": task.status,
@@ -141,17 +158,22 @@ async def cancel_sync(
     db: AsyncSession = Depends(get_db),
 ):
     """取消同步任务。"""
+    logger.info(f"[同步API] 取消同步任务 task_id={task_id}")
     task = await db.get(SyncTask, task_id)
     if not task:
+        logger.warning(f"[同步API] 取消失败：任务不存在 task_id={task_id}")
         return error_response("任务不存在", status_code=404)
 
     if task.status not in ("pending", "running"):
+        logger.warning(f"[同步API] 取消失败：状态不允许 task_id={task_id} status={task.status}")
         return error_response(f"任务状态为 {task.status}，无法取消")
 
     cancelled = await sync_engine.cancel(task_id)
     if cancelled:
+        logger.info(f"[同步API] 取消请求已发送 task_id={task_id}")
         return success({"task_id": task_id}, 1, "取消请求已发送")
     else:
+        logger.warning(f"[同步API] 取消失败：任务已完成或不存在 task_id={task_id}")
         return error_response("任务可能已完成或不存在")
 
 
@@ -182,6 +204,7 @@ async def list_policies(
     db: AsyncSession = Depends(get_db),
 ):
     """同步策略列表。"""
+    logger.info("[同步API] 查询同步策略列表")
     result = await db.execute(
         select(SyncPolicy)
         .order_by(SyncPolicy.name)
@@ -213,6 +236,7 @@ async def list_policies(
             "keep_old_versions": p.keep_old_versions,
         })
 
+    logger.info(f"[同步API] 返回 {len(data)} 个策略")
     return success(data, len(data))
 
 
@@ -222,9 +246,13 @@ async def create_policy(
     db: AsyncSession = Depends(get_db),
 ):
     """创建同步策略。"""
-    # 验证源存在
+    logger.info(
+        f"[同步API] 创建策略 name={body.name} source_id={body.source_id} "
+        f"schedule={body.schedule} enabled={body.enabled}"
+    )
     source = await db.get(RepositorySource, body.source_id)
     if not source:
+        logger.warning(f"[同步API] 创建失败：仓库源不存在 source_id={body.source_id}")
         return error_response("仓库源不存在", status_code=404)
 
     policy = SyncPolicy(
@@ -240,10 +268,10 @@ async def create_policy(
     await db.commit()
     await db.refresh(policy)
 
-    # 重新加载调度器任务
     from app.services.scheduler import reload_jobs
     reload_jobs()
 
+    logger.info(f"[同步API] 创建成功 policy_id={policy.id} name={policy.name}")
     return success({"id": policy.id}, 1, "创建成功")
 
 
@@ -254,21 +282,24 @@ async def update_policy(
     db: AsyncSession = Depends(get_db),
 ):
     """更新同步策略。"""
+    update_data = body.model_dump(exclude_unset=True)
+    logger.info(f"[同步API] 更新策略 policy_id={policy_id} fields={list(update_data.keys())}")
+
     policy = await db.get(SyncPolicy, policy_id)
     if not policy:
+        logger.warning(f"[同步API] 更新失败：策略不存在 policy_id={policy_id}")
         return error_response("策略不存在", status_code=404)
 
-    update_data = body.model_dump(exclude_unset=True)
     for key, value in update_data.items():
         setattr(policy, key, value)
 
     await db.commit()
     await db.refresh(policy)
 
-    # 重新加载调度器任务
     from app.services.scheduler import reload_jobs
     reload_jobs()
 
+    logger.info(f"[同步API] 更新成功 policy_id={policy_id}")
     return success({"id": policy_id}, 1, "更新成功")
 
 
@@ -278,15 +309,18 @@ async def delete_policy(
     db: AsyncSession = Depends(get_db),
 ):
     """删除同步策略。"""
+    logger.info(f"[同步API] 删除策略 policy_id={policy_id}")
     policy = await db.get(SyncPolicy, policy_id)
     if not policy:
+        logger.warning(f"[同步API] 删除失败：策略不存在 policy_id={policy_id}")
         return error_response("策略不存在", status_code=404)
 
+    policy_name = policy.name
     await db.delete(policy)
     await db.commit()
 
-    # 重新加载调度器任务
     from app.services.scheduler import reload_jobs
     reload_jobs()
 
+    logger.info(f"[同步API] 删除成功 policy_id={policy_id} name={policy_name}")
     return success({"id": policy_id}, 1, "删除成功")

@@ -1,7 +1,9 @@
+﻿# -*- coding: utf-8 -*-
 """仪表盘 API。
 
 提供统计数据：扩展总数、包总数、磁盘用量、同步状态、缓存管理。
 """
+import logging
 import shutil
 from pathlib import Path
 
@@ -21,6 +23,8 @@ from app.models import (
     User,
 )
 from app.services.auth_service import require_admin, require_auth
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/dashboard", tags=["dashboard"])
 
@@ -95,6 +99,11 @@ async def get_stats(
     # 磁盘用量
     repo_dir = Path(settings.repo_dir)
     disk_usage = _get_disk_usage(repo_dir)
+
+    logger.debug(
+        f"[仪表盘API] 统计: ext={ext_count} pkg={build_count} cached={cached_count} "
+        f"sources={enabled_source_count}/{source_count} tasks_running={running_tasks}"
+    )
 
     data = {
         "extensions": {
@@ -178,6 +187,8 @@ async def evict_cache(
 
     repo_dir = settings.repo_dir
 
+    logger.info(f"[仪表盘API] 管理员手动触发缓存淘汰 mode={mode}")
+
     if mode == "full":
         result = await run_full_eviction()
     elif mode == "disk":
@@ -187,9 +198,11 @@ async def evict_cache(
     elif mode == "versions":
         result = {"old_versions": await evict_old_versions(repo_dir)}
     else:
+        logger.warning(f"[仪表盘API] 缓存淘汰失败：未知模式 mode={mode}")
         result = {"error": f"未知模式: {mode}"}
 
     # 附加当前磁盘用量
     result["disk_after"] = _get_disk_usage(repo_dir)
 
+    logger.info(f"[仪表盘API] 缓存淘汰完成 result={result}")
     return success(result, 1, "缓存淘汰完成")

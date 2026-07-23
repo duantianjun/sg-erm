@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """扩展模型。
 
 三层结构：Extension -> ExtensionVersion -> ExtensionBuild

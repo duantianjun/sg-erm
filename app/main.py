@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """SG-ERM FastAPI 应用入口。
 
 启动流程：
@@ -27,6 +28,7 @@ from app.api import audit as audit_api
 from app.api import auth, dashboard, extensions, publish, repo_files, sources, sync, tokens, whitelist
 from app.config import settings
 from app.database import async_session_factory, close_db, init_db
+from app.logging_config import setup_logging
 from app.middleware.audit import AuditMiddleware
 from app.services.proxy_engine import proxy_engine
 from app.services.scheduler import start_scheduler, stop_scheduler
@@ -40,8 +42,9 @@ TEMPLATE_DIR = BASE_DIR / "templates"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """应用生命周期：启动时初始化数据库，关闭时释放资源。"""
+    """应用生命周期：启动时初始化日志和数据库，关闭时释放资源。"""
     # === 启动 ===
+    setup_logging()
     await init_db()
 
     # 初始化默认管理员账号（如果不存在）
@@ -86,11 +89,87 @@ async def _init_default_admin() -> None:
             print("[WARN] 生产环境请立即修改默认密码！")
 
 
+# OpenAPI tags 元数据
+tags_metadata = [
+    {
+        "name": "auth",
+        "description": "认证管理 - 用户登录、登出、密码修改、用户管理",
+    },
+    {
+        "name": "tokens",
+        "description": "API Token 管理 - 创建、列出、删除 API Token",
+    },
+    {
+        "name": "sources",
+        "description": "仓库源管理 - 上游仓库源的增删改查、健康检查、索引聚合",
+    },
+    {
+        "name": "whitelist",
+        "description": "全局白名单 - 控制可同步和代理的扩展范围",
+    },
+    {
+        "name": "sync",
+        "description": "同步任务 - 手动触发/取消同步、同步策略管理",
+    },
+    {
+        "name": "extensions",
+        "description": "扩展目录 - 扩展列表查询、扩展详情",
+    },
+    {
+        "name": "publish",
+        "description": "自定义扩展发布 - 发布者管理、扩展上传发布",
+    },
+    {
+        "name": "repo-files",
+        "description": "仓库文件浏览器 - 本地缓存包的浏览、删除、验证",
+    },
+    {
+        "name": "dashboard",
+        "description": "仪表盘 - 系统统计、缓存管理",
+    },
+    {
+        "name": "audit",
+        "description": "审计日志 - 操作日志查询与统计",
+    },
+]
+
 app = FastAPI(
     title="SG-ERM",
-    description="StackGres Extension Repository Manager",
+    description="""StackGres Extension Repository Manager
+
+SG-ERM 是 StackGres 扩展仓库管理器，提供扩展包的同步、代理、缓存和白名单管理功能。
+
+## 认证方式
+
+本 API 支持两种认证方式：
+
+### 1. JWT Bearer Token（Web 界面登录）
+- 先调用 `POST /api/v1/auth/login` 获取 access_token
+- 在请求头中携带: `Authorization: Bearer <access_token>`
+
+### 2. API Token（程序/集群认证）
+- 在管理界面创建 API Token
+- 在请求头中携带: `Authorization: Bearer <api_token>`
+
+## 响应格式
+
+所有接口返回 layui 兼容格式：
+```json
+{
+    "code": 0,      // 0=成功, 非0=失败
+    "msg": "",      // 消息
+    "count": 100,   // 总记录数（分页）
+    "data": [...]   // 数据
+}
+```
+""",
     version="0.1.0",
     lifespan=lifespan,
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+    openapi_tags=tags_metadata,
+    swagger_ui_parameters={"persistAuthorization": True},
 )
 
 # 挂载静态文件（layui 等前端资产）
@@ -117,6 +196,59 @@ app.include_router(whitelist.router)
 
 # 添加审计中间件
 app.add_middleware(AuditMiddleware)
+
+
+# ─── Swagger/OpenAPI 认证配置 ────────────────────────────────────
+
+def custom_openapi():
+    """自定义 OpenAPI schema，添加 Bearer Token 认证配置。"""
+    if app.openapi_schema:
+        return app.openapi_schema
+
+    from fastapi.openapi.utils import get_openapi
+
+    openapi_schema = get_openapi(
+        title=app.title,
+        version=app.version,
+        description=app.description,
+        routes=app.routes,
+        tags=tags_metadata,
+    )
+
+    # 添加 Bearer Token security scheme
+    openapi_schema["components"]["securitySchemes"] = {
+        "BearerAuth": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "输入 JWT access_token 或 API Token，格式: Bearer <token>",
+        }
+    }
+
+    # 为需要认证的接口添加 security 要求
+    # 注意：public 接口（如 /api/v1/auth/login）不需要认证
+    public_paths = {
+        "/api/v1/auth/login": {"post"},
+        "/health": {"get"},
+        "/metrics": {"get"},
+    }
+
+    for path, methods in openapi_schema.get("paths", {}).items():
+        for method, operation in methods.items():
+            if method.lower() == "parameters":
+                continue
+            # 检查是否是 public 接口
+            if path in public_paths and method.lower() in public_paths[path]:
+                continue
+            # 为其他接口添加 BearerAuth 要求
+            if "security" not in operation:
+                operation["security"] = [{"BearerAuth": []}]
+
+    app.openapi_schema = openapi_schema
+    return app.openapi_schema
+
+
+app.openapi = custom_openapi
 
 
 @app.get("/health", response_class=JSONResponse)
@@ -163,11 +295,11 @@ async def dashboard_page(request: Request) -> HTMLResponse:
 
 @app.get("/extensions", response_class=HTMLResponse)
 async def extensions_page(request: Request) -> HTMLResponse:
-    """扩展目录页面。"""
+    """扩展管理页面（含扩展目录、仓库文件、自定义发布三个 Tab）。"""
     return templates.TemplateResponse(
         request,
         "extensions.html",
-        {"title": "扩展目录", "active_nav": "extensions"},
+        {"title": "扩展管理", "active_nav": "extensions"},
     )
 
 
@@ -203,22 +335,14 @@ async def whitelist_page(request: Request) -> HTMLResponse:
 
 @app.get("/publish", response_class=HTMLResponse)
 async def publish_page(request: Request) -> HTMLResponse:
-    """自定义扩展发布页面。"""
-    return templates.TemplateResponse(
-        request,
-        "publish.html",
-        {"title": "自定义扩展", "active_nav": "publish"},
-    )
+    """自定义扩展发布页面 → 重定向到扩展管理 Tab 3。"""
+    return RedirectResponse(url="/extensions", status_code=302)
 
 
 @app.get("/repo-files", response_class=HTMLResponse)
 async def repo_files_page(request: Request) -> HTMLResponse:
-    """仓库文件浏览页面。"""
-    return templates.TemplateResponse(
-        request,
-        "repo_files.html",
-        {"title": "仓库文件", "active_nav": "repo_files"},
-    )
+    """仓库文件浏览页面 → 重定向到扩展管理 Tab 2。"""
+    return RedirectResponse(url="/extensions", status_code=302)
 
 
 @app.get("/extensions/{name}", response_class=HTMLResponse)

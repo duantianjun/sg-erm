@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """Prometheus 监控指标。
 
 暴露 /metrics 端点，提供以下指标：

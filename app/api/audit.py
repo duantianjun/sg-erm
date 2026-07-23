@@ -1,7 +1,10 @@
+﻿# -*- coding: utf-8 -*-
 """审计日志 API。
 
 提供审计日志的查询和统计。
 """
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,6 +13,8 @@ from app.api.response import success
 from app.database import get_db
 from app.models import AuditLog, User
 from app.services.auth_service import require_admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/audit", tags=["audit"])
 
@@ -26,6 +31,11 @@ async def list_audit_logs(
     _: User = Depends(require_admin),
 ):
     """审计日志列表（仅管理员）。"""
+    logger.info(
+        f"[审计API] 查询审计日志 page={page} limit={limit} "
+        f"action={action or 'all'} result={result or 'all'} "
+        f"start_date={start_date or 'any'} end_date={end_date or 'any'}"
+    )
     query = select(AuditLog).order_by(AuditLog.timestamp.desc())
 
     if action:
@@ -37,11 +47,9 @@ async def list_audit_logs(
     if end_date:
         query = query.where(AuditLog.timestamp <= f"{end_date} 23:59:59")
 
-    # 总数
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0
 
-    # 分页
     query = query.offset((page - 1) * limit).limit(limit)
     result_obj = await db.execute(query)
     logs = result_obj.scalars().all()
@@ -60,6 +68,7 @@ async def list_audit_logs(
         for log in logs
     ]
 
+    logger.info(f"[审计API] 返回 {len(data)} 条审计日志，总计 {total} 条")
     return success(data, total)
 
 
@@ -69,6 +78,7 @@ async def audit_stats(
     _: User = Depends(require_admin),
 ):
     """审计统计（仅管理员）。"""
+    logger.info("[审计API] 查询审计统计")
     total = await db.scalar(select(func.count()).select_from(AuditLog)) or 0
     success_count = await db.scalar(
         select(func.count()).where(AuditLog.result == "success")
@@ -77,14 +87,17 @@ async def audit_stats(
         select(func.count()).where(AuditLog.result == "failure")
     ) or 0
 
-    # 最近 24 小时
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
 
-    since = datetime.utcnow() - timedelta(hours=24)
+    since = datetime.now(timezone.utc) - timedelta(hours=24)
     recent = await db.scalar(
         select(func.count()).where(AuditLog.timestamp >= since)
     ) or 0
 
+    logger.info(
+        f"[审计API] 统计结果 total={total} success={success_count} "
+        f"failure={failure_count} recent_24h={recent}"
+    )
     return success(
         {
             "total": total,

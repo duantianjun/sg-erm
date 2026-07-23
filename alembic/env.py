@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """Alembic 异步迁移环境。
 
 从 app.config 读取数据库 URL，导入所有 ORM 模型作为 target_metadata。

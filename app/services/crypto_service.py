@@ -1,3 +1,4 @@
+﻿# -*- coding: utf-8 -*-
 """RSA 密钥管理服务。
 
 为自定义扩展发布者管理 RSA 2048 密钥对：
@@ -9,6 +10,7 @@
 私钥加密方案：PBKDF2 + AES-256-GCM
 """
 import hashlib
+import logging
 import os
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -17,6 +19,8 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 # 常量
 KEY_SIZE = 2048
@@ -49,20 +53,26 @@ def encrypt_private_key(private_key_pem: str, password: str) -> str:
 
     # salt(16) + nonce(12) + ciphertext
     combined = salt + nonce + ciphertext
+    logger.debug(f"[加密服务] 私钥加密完成 ciphertext_len={len(ciphertext)} bytes")
     return combined.hex()
 
 
 def decrypt_private_key(encrypted: str, password: str) -> str:
     """解密私钥 PEM 字符串。"""
-    combined = bytes.fromhex(encrypted)
-    salt = combined[:SALT_LEN]
-    nonce = combined[SALT_LEN : SALT_LEN + NONCE_LEN]
-    ciphertext = combined[SALT_LEN + NONCE_LEN :]
+    try:
+        combined = bytes.fromhex(encrypted)
+        salt = combined[:SALT_LEN]
+        nonce = combined[SALT_LEN : SALT_LEN + NONCE_LEN]
+        ciphertext = combined[SALT_LEN + NONCE_LEN :]
 
-    key = _derive_key(password, salt)
-    aesgcm = AESGCM(key)
-    plaintext = aesgcm.decrypt(nonce, ciphertext, None)
-    return plaintext.decode("utf-8")
+        key = _derive_key(password, salt)
+        aesgcm = AESGCM(key)
+        plaintext = aesgcm.decrypt(nonce, ciphertext, None)
+        logger.debug(f"[加密服务] 私钥解密成功 plaintext_len={len(plaintext)} bytes")
+        return plaintext.decode("utf-8")
+    except Exception as e:
+        logger.error(f"[加密服务] 私钥解密失败: {e}")
+        raise
 
 
 def generate_key_pair() -> tuple[str, str]:
@@ -71,6 +81,7 @@ def generate_key_pair() -> tuple[str, str]:
     Returns:
         (private_key_pem, public_key_pem)
     """
+    logger.info(f"[加密服务] 开始生成 RSA {KEY_SIZE} 密钥对")
     private_key = rsa.generate_private_key(
         public_exponent=65537,
         key_size=KEY_SIZE,
@@ -87,6 +98,7 @@ def generate_key_pair() -> tuple[str, str]:
         format=serialization.PublicFormat.SubjectPublicKeyInfo,
     ).decode("utf-8")
 
+    logger.info(f"[加密服务] RSA 密钥对生成完成 private_len={len(private_pem)} public_len={len(public_pem)}")
     return private_pem, public_pem
 
 
@@ -101,6 +113,7 @@ def sign_data(private_key_pem: str, data: bytes) -> bytes:
         padding.PKCS1v15(),
         hashes.SHA256(),
     )
+    logger.debug(f"[加密服务] 签名完成 signature_len={len(signature)} bytes")
     return signature
 
 
@@ -116,20 +129,27 @@ def sign_sha256_file(private_key_pem: str, tgz_path: str) -> bytes:
 
     # 读取 .tgz 文件并计算 SHA256
     hasher = hashlib.sha256()
+    file_size = 0
     with open(tgz_path, "rb") as f:
         while chunk := f.read(65536):
             hasher.update(chunk)
+            file_size += len(chunk)
     digest = hasher.hexdigest()
 
     # 用私钥签名哈希值（字符串形式）
     signature = sign_data(private_key_pem, digest.encode("utf-8"))
+    logger.debug(
+        f"[加密服务] 文件签名完成 tgz={tgz_path} size={file_size} sha256={digest[:16]}..."
+    )
     return base64.b64encode(signature)
 
 
 def get_system_password() -> str:
     """获取系统加密密码（来自环境变量 SECRET_KEY）。"""
     pwd = settings.secret_key
-    if pwd == "change-me-in-production" or len(pwd) < 16:
-        # 开发环境警告：密码太短
-        pass
+    if len(pwd) < 16:
+        logger.warning(
+            f"[加密服务] SECRET_KEY 长度过短（{len(pwd)} 字节），"
+            f"建议 ≥32 字节以确保私钥加密强度"
+        )
     return pwd
