@@ -49,9 +49,8 @@ class AuditMiddleware(BaseHTTPMiddleware):
 
         start_time = time.time()
 
-        # 获取认证主体（异步，但中间件不支持 await Depends）
-        # 这里我们只记录请求基本信息，认证信息从 request.state 获取
-        actor = request.headers.get("X-Real-IP", "anonymous")
+        # 获取认证主体
+        actor = await self._get_actor(request)
         client_ip = self._get_client_ip(request)
 
         # 执行请求
@@ -83,6 +82,43 @@ class AuditMiddleware(BaseHTTPMiddleware):
             logger.debug(f"[审计] 写入审计日志失败（非致命）: {e}")
 
         return response
+
+    async def _get_actor(self, request: Request) -> str:
+        """获取认证主体。
+
+        优先从 request.state.principal 获取（由路由依赖设置），
+        如果未设置，则尝试直接解析请求头中的认证信息。
+        """
+        if hasattr(request.state, "principal") and request.state.principal:
+            principal = request.state.principal
+            if principal["type"] == "user":
+                return f"user:{principal['name']}"
+            else:
+                return f"token:{principal['name']}"
+
+        from app.database import async_session_maker
+        from app.services.auth_service import (
+            get_current_user,
+            get_api_token_auth,
+            oauth2_scheme,
+        )
+
+        token = None
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            token = auth_header[7:]
+
+        async with async_session_maker() as session:
+            if token:
+                user = await get_current_user(token, session)
+                if user:
+                    return f"user:{user.username}"
+
+            api_token = await get_api_token_auth(request, session)
+            if api_token:
+                return f"token:{api_token.name}"
+
+        return "anonymous"
 
     def _get_client_ip(self, request: Request) -> str:
         """获取客户端真实 IP。"""

@@ -256,21 +256,34 @@ async def get_current_principal(
 ) -> Optional[dict]:
     user = await get_current_user(token, db)
     if user:
-        return {
+        principal = {
             "type": "user",
             "id": user.id,
             "name": user.username,
             "is_admin": user.is_admin,
         }
+        request.state.principal = principal
+        return principal
 
     api_token = await get_api_token_auth(request, db)
     if api_token:
-        return {
+        principal = {
             "type": "token",
             "id": api_token.id,
             "name": api_token.name,
             "is_admin": api_token.type == "admin",
             "permissions": api_token.permissions or [],
         }
+        request.state.principal = principal
+        return principal
 
+    request.state.principal = None
     return None
+
+
+async def attach_principal_to_request(
+    request: Request,
+    token: Optional[str] = Depends(oauth2_scheme),
+    db: AsyncSession = Depends(get_db),
+):
+    await get_current_principal(request, token, db)
