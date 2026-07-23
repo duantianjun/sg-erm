@@ -81,10 +81,12 @@ def create_refresh_token(data: dict) -> str:
 
 
 async def get_current_user(
+    request: Request,
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[User]:
     if not token:
+        request.state.principal = None
         return None
 
     try:
@@ -97,18 +99,22 @@ async def get_current_user(
         token_version: int = payload.get("token_version", 0)
         if user_id is None:
             logger.debug("[认证] JWT 缺少 sub 字段")
+            request.state.principal = None
             return None
     except JWTError as e:
         logger.debug(f"[认证] JWT 解码失败: {e}")
+        request.state.principal = None
         return None
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         logger.debug(f"[认证] 用户不存在 user_id={user_id}")
+        request.state.principal = None
         return None
     if not user.is_active:
         logger.warning(f"[认证] 用户已禁用 user_id={user_id} username={user.username}")
+        request.state.principal = None
         return None
 
     if token_version != user.token_version:
@@ -116,16 +122,24 @@ async def get_current_user(
             f"[认证] JWT token_version 不匹配 user_id={user_id} username={user.username} "
             f"jwt_ver={token_version} db_ver={user.token_version}"
         )
+        request.state.principal = None
         return None
 
+    request.state.principal = {
+        "type": "user",
+        "id": user.id,
+        "name": user.username,
+        "is_admin": user.is_admin,
+    }
     return user
 
 
 async def require_auth(
+    request: Request,
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    user = await get_current_user(token, db)
+    user = await get_current_user(request, token, db)
     if not user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -136,10 +150,11 @@ async def require_auth(
 
 
 async def require_admin(
+    request: Request,
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> User:
-    user = await require_auth(token, db)
+    user = await require_auth(request, token, db)
     if not user.is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,

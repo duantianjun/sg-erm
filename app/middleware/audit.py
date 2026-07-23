@@ -48,13 +48,13 @@ class AuditMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         start_time = time.time()
-
-        # 获取认证主体
-        actor = await self._get_actor(request)
         client_ip = self._get_client_ip(request)
 
-        # 执行请求
+        # 执行请求（路由依赖会在此期间设置 request.state.principal）
         response = await call_next(request)
+
+        # 在路由处理后获取认证主体，此时 request.state.principal 可能已被设置
+        actor = await self._get_actor(request)
 
         duration_ms = int((time.time() - start_time) * 1000)
 
@@ -97,26 +97,37 @@ class AuditMiddleware(BaseHTTPMiddleware):
                 return f"token:{principal['name']}"
 
         from app.database import async_session_maker
-        from app.services.auth_service import (
-            get_current_user,
-            get_api_token_auth,
-            oauth2_scheme,
-        )
+        from app.services.auth_service import get_current_user, get_api_token_auth
 
         token = None
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]
 
+        logger.debug(f"[审计] 认证头存在: {auth_header is not None and len(auth_header) > 0}")
+        logger.debug(f"[审计] 提取token: {token is not None}")
+
         async with async_session_maker() as session:
             if token:
-                user = await get_current_user(token, session)
-                if user:
-                    return f"user:{user.username}"
+                try:
+                    user = await get_current_user(token, session)
+                    if user:
+                        logger.debug(f"[审计] JWT认证成功: user:{user.username}")
+                        return f"user:{user.username}"
+                    else:
+                        logger.debug(f"[审计] JWT认证失败: get_current_user返回None")
+                except Exception as e:
+                    logger.debug(f"[审计] JWT认证异常: {e}")
 
-            api_token = await get_api_token_auth(request, session)
-            if api_token:
-                return f"token:{api_token.name}"
+            try:
+                api_token = await get_api_token_auth(request, session)
+                if api_token:
+                    logger.debug(f"[审计] API Token认证成功: token:{api_token.name}")
+                    return f"token:{api_token.name}"
+                else:
+                    logger.debug(f"[审计] API Token认证失败: get_api_token_auth返回None")
+            except Exception as e:
+                logger.debug(f"[审计] API Token认证异常: {e}")
 
         return "anonymous"
 
