@@ -225,8 +225,6 @@ async def get_api_token_auth(
     支持 X-API-Token 头或 Authorization: Bearer <token>。
     使用 token_prefix 索引优化查询，避免全表遍历。
     """
-    token = None
-
     token = request.headers.get("X-API-Token")
     if not token:
         auth = request.headers.get("Authorization", "")
@@ -270,7 +268,7 @@ async def get_current_principal(
     token: Optional[str] = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> Optional[dict]:
-    user = await get_current_user(token, db)
+    user = await get_current_user(request, token, db)
     if user:
         principal = {
             "type": "user",

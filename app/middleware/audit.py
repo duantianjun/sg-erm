@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """审计日志中间件。
 
 自动记录所有 HTTP 请求的关键信息到 audit_log 表。
@@ -12,7 +12,6 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.models.audit import AuditLog
-from app.services.auth_service import get_current_principal
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +109,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         async with async_session_maker() as session:
             if token:
                 try:
-                    user = await get_current_user(token, session)
+                    user = await get_current_user(request, token, session)
                     if user:
                         logger.debug(f"[审计] JWT认证成功: user:{user.username}")
                         return f"user:{user.username}"
@@ -195,7 +194,7 @@ class AuditMiddleware(BaseHTTPMiddleware):
         parts = path.strip("/").split("/")
 
         if len(parts) >= 3 and parts[0] == "api" and parts[1] == "v1":
-            resource = parts[2] if len(parts) > 2 else "unknown"
+            resource = parts[2]
             if len(parts) > 3 and parts[3]:
                 return f"{resource}.detail"
             return resource

@@ -240,7 +240,10 @@ async def batch_delete_extensions(
 
             # 删除磁盘文件
             for rel_path in paths:
-                file_path = os.path.join(repo_dir, rel_path)
+                file_path = os.path.normpath(os.path.join(repo_dir, rel_path))
+                if not file_path.startswith(os.path.normpath(repo_dir) + os.sep):
+                    logger.warning(f"跳过非法路径: {rel_path}")
+                    continue
                 if os.path.exists(file_path):
                     try:
                         os.remove(file_path)
@@ -300,8 +303,10 @@ async def batch_delete_builds(
                 continue
 
             # 删除磁盘文件
-            file_path = os.path.join(repo_dir, build.package_path)
-            if os.path.exists(file_path):
+            file_path = os.path.normpath(os.path.join(repo_dir, build.package_path))
+            if not file_path.startswith(os.path.normpath(repo_dir) + os.sep):
+                logger.warning(f"跳过非法路径: {build.package_path}")
+            elif os.path.exists(file_path):
                 try:
                     os.remove(file_path)
                 except OSError as e:

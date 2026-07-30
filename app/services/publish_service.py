@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """自定义扩展发布服务。
 
 处理完整的发布流程：
@@ -28,7 +28,7 @@ from app.services.crypto_service import (
     get_system_password,
     sign_sha256_file,
 )
-from app.services.naming import get_local_path, get_package_name
+from app.services.naming import get_local_path, get_package_name, validate_path_segment
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +156,7 @@ def update_local_index(
 
     # 更新 channels
     channels = ext_entry.get("channels", {})
-    if channel not in channels.values():
+    if channel not in channels:
         channels[channel] = version
         ext_entry["channels"] = channels
 
@@ -254,7 +254,17 @@ async def publish_extension(
         logger.error(f"[发布服务] 私钥解密失败 publisher={publisher.name}: {e}")
         return {"success": False, "package_path": "", "error": f"私钥解密失败: {e}"}
 
-    # 3. 构建包名和路径
+    # 3. 校验路径段安全性（防止路径遍历）
+    for seg_name, seg_val in [("ext_name", ext_name), ("version", version), ("flavor", flavor),
+                               ("pg_version", pg_version), ("arch", arch), ("os_name", os_name)]:
+        if not validate_path_segment(seg_val):
+            logger.warning(f"[发布服务] 路径段校验失败 {seg_name}={seg_val}")
+            return {"success": False, "package_path": "", "error": f"非法的 {seg_name} 值"}
+    if build_num and not validate_path_segment(build_num):
+        logger.warning(f"[发布服务] 路径段校验失败 build_num={build_num}")
+        return {"success": False, "package_path": "", "error": "非法的 build_num 值"}
+
+    # 4. 构建包名和路径
     package_name = get_package_name(ext_name, version, flavor, pg_version, build_num)
     rel_path = get_local_path(publisher.name, arch, os_name, package_name)
     dest_path = repo_dir / rel_path
@@ -389,6 +399,7 @@ async def publish_extension(
         }
 
     except Exception as e:
+        await session.rollback()
         logger.exception(f"[发布服务] 发布过程异常 ext={ext_name} version={version}: {e}")
         return {"success": False, "package_path": "", "error": str(e)}
 

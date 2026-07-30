@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """扩展模型。
 
 三层结构：Extension -> ExtensionVersion -> ExtensionBuild
@@ -6,6 +6,7 @@
 - ExtensionVersion: 版本（如 3.4），关联通道
 - ExtensionBuild: 具体构建（PG 版本 + 架构 + OS），关联实际包文件
 """
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import Boolean, BigInteger, DateTime, ForeignKey, String, Text
@@ -78,7 +79,7 @@ class ExtensionBuild(Base):
     sha256: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     verified: Mapped[bool] = mapped_column(Boolean, default=False)  # 签名是否验证通过
     cached: Mapped[bool] = mapped_column(Boolean, default=False)  # 是否已缓存到本地
-    last_accessed: Mapped[Optional[str]] = mapped_column(DateTime, nullable=True)  # 用于 LRU
+    last_accessed: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 用于 LRU
 
     # 关系
     version = relationship("ExtensionVersion", back_populates="builds")

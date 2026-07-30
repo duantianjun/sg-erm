@@ -13,11 +13,14 @@
 import asyncio
 import json
 import logging
+import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
 import aiohttp
+from sqlalchemy import select
 
 from app.config import settings
 from app.database import async_session_factory
@@ -141,6 +144,11 @@ class SyncEngine:
             async with self.session_factory() as session:
                 source = await session.get(RepositorySource, source_id)
                 task = await session.get(SyncTask, task_id)
+
+                if not source or not task:
+                    logger.error(f"[{task_id}] source 或 task 不存在 source_id={source_id}")
+                    await self._update_task(None, task, status="failed", error="source 或 task 不存在")
+                    return
 
                 await self._notify({
                     "type": "start",
@@ -468,7 +476,7 @@ class SyncEngine:
                     local_file = self.config.repo_dir / pkg["local_path"]
                     pkg_name = pkg["package_name"]
                     tmp_suffix = self.config.temp_file_suffix
-                    tmp_file = Path(str(local_file) + tmp_suffix)
+                    tmp_file = Path(str(local_file) + f".{os.getpid()}.{uuid.uuid4()}{tmp_suffix}")
                     chunk_size = self.config.io_chunk_size
 
                     # 检查是否已下载完成
@@ -522,16 +530,15 @@ class SyncEngine:
                                     async for chunk in resp.content.iter_chunked(chunk_size):
                                         f.write(chunk)
 
-                        # 下载完成，重命名为最终文件名
-                        tmp_file.rename(local_file)
+                        # 下载完成，原子替换为最终文件名
+                        os.replace(str(tmp_file), str(local_file))
                         return "ok"
                     except Exception as e:
                         logger.warning(f"下载失败 {pkg_name}: {e}")
                         return f"error"
 
                     finally:
-                        nonlocal downloaded, failed, skipped
-                        # 进度更新在 _update_progress 中处理
+                        pass
 
             # 使用 asyncio.gather 并发下载
             results = await asyncio.gather(
@@ -844,7 +851,7 @@ class SyncEngine:
         else:
             index_path = self.config.repo_dir / INDEX_PATH
             index_path.parent.mkdir(parents=True, exist_ok=True)
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 None,
                 lambda: self._write_json(index_path, index_data),

@@ -111,7 +111,7 @@ def validate_path_segment(segment: str) -> bool:
     return True
 
 
-def parse_package_name(package_name: str) -> dict:
+def parse_package_name(package_name: str) -> dict | None:
     """从包名解析扩展信息。
 
     包名格式: {name}-{version}-{flavor}{pgVersion}[-build-{build}]

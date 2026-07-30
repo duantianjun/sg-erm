@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """API Token 管理 API。
 
 提供 API Token 的创建、列出、删除。
@@ -7,6 +7,8 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, Query
+from typing import Literal
+
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,7 +32,7 @@ router = APIRouter(prefix="/api/v1/tokens", tags=["tokens"])
 class TokenCreate(BaseModel):
     """创建 API Token 请求。"""
     name: str
-    type: str = "read"
+    type: Literal["read", "write", "admin"] = "read"
     expires_days: int | None = None
     permissions: list | None = None
 

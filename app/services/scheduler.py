@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """同步任务调度器。
 
 使用 APScheduler 的 AsyncIOScheduler 实现定时同步。
@@ -6,6 +6,7 @@
 - 根据 schedule (Cron 表达式) 注册定时任务
 - 触发时调用 SyncEngine.run()
 """
+import asyncio
 import logging
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -19,6 +20,8 @@ from app.services.sync_engine import sync_engine
 
 logger = logging.getLogger(__name__)
 task_logger = get_task_logger()
+
+_background_tasks: set[asyncio.Task] = set()
 
 scheduler = AsyncIOScheduler()
 
@@ -79,7 +82,9 @@ def reload_jobs():
                 except Exception as e:
                     task_logger.error(f"[调度器] 无法解析 Cron 表达式 '{policy.schedule}' policy={policy.id}: {e}")
 
-    asyncio.create_task(_load())
+    task = asyncio.create_task(_load())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 def start_scheduler():

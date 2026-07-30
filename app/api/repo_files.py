@@ -227,7 +227,7 @@ async def delete_package(
         os.remove(file_path)
     except OSError as e:
         logger.warning("删除文件失败 %s: %s", file_path, e)
-        return error_response(f"删除文件失败: {e}")
+        return error_response("删除文件失败，请查看服务器日志")
 
     build.cached = False
     audit = AuditLog(
@@ -467,14 +467,14 @@ async def consistency_check(
             "file_size": file_size,
         })
 
+    logger.info(
+        f"[仓库文件API] 一致性检查完成: missing={len(missing_data)} orphans={len(orphan_data)}"
+    )
+
     return success({
         "missing_files": missing_data,
         "orphan_files": orphan_data,
     }, 1)
-
-    logger.info(
-        f"[仓库文件API] 一致性检查完成: missing={len(missing_data)} orphans={len(orphan_data)}"
-    )
 
 
 # ─── 修复一致性（将孤儿文件同步到数据库） ────────────────────────

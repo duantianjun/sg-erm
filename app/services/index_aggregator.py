@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """多源 index.json 聚合服务。
 
 当系统配置了多个仓库源时，将所有源的 index.json 合并为一个统一的索引文件。
@@ -278,7 +278,7 @@ async def build_aggregated_index() -> Path | None:
         index_path = settings.repo_dir / INDEX_PATH
         index_path.parent.mkdir(parents=True, exist_ok=True)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
             lambda: _write_json(index_path, aggregated),

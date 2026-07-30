@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """审计日志 API。
 
 提供审计日志的查询和统计。
@@ -43,9 +43,19 @@ async def list_audit_logs(
     if result:
         query = query.where(AuditLog.result == result)
     if start_date:
-        query = query.where(AuditLog.timestamp >= f"{start_date} 00:00:00")
+        from datetime import datetime as dt
+        try:
+            start_dt = dt.strptime(start_date, "%Y-%m-%d")
+            query = query.where(AuditLog.timestamp >= start_dt)
+        except ValueError:
+            return error_response("start_date 格式必须为 YYYY-MM-DD")
     if end_date:
-        query = query.where(AuditLog.timestamp <= f"{end_date} 23:59:59")
+        from datetime import datetime as dt, timedelta
+        try:
+            end_dt = dt.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+            query = query.where(AuditLog.timestamp < end_dt)
+        except ValueError:
+            return error_response("end_date 格式必须为 YYYY-MM-DD")
 
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0

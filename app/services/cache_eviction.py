@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """缓存淘汰服务。
 
 三种淘汰策略（按优先级）：
@@ -169,11 +169,8 @@ async def evict_old_versions(repo_dir: Path) -> dict:
                 .order_by(ExtensionVersion.created_at.desc())
             )).scalars().all()
 
-            versions_to_keep = set()
             for i, ver in enumerate(versions):
-                if i < keep:
-                    versions_to_keep.add(ver.id)
-                else:
+                if i >= keep:
                     builds = (await session.execute(
                         select(ExtensionBuild)
                         .where(

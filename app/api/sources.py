@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """仓库源管理 API。
 
 提供仓库源的增删改查。
@@ -6,7 +6,7 @@
 import logging
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -34,6 +34,17 @@ class SourceCreate(BaseModel):
     auth_type: str = "none"
     auth_config: dict | None = None
     proxy_url: str | None = None
+
+    @field_validator("url")
+    @classmethod
+    def validate_url(cls, v: str) -> str:
+        from urllib.parse import urlparse
+        parsed = urlparse(v)
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError("URL 协议必须为 http 或 https")
+        if not parsed.hostname:
+            raise ValueError("URL 必须包含有效主机名")
+        return v
 
 
 class SourceUpdate(BaseModel):

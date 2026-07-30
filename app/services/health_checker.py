@@ -25,6 +25,8 @@ from app.logging_config import get_task_logger
 from app.models import RepositorySource
 from app.services.naming import get_index_url
 
+_background_tasks: set[asyncio.Task] = set()
+
 logger = logging.getLogger(__name__)
 task_logger = get_task_logger()
 
@@ -136,5 +138,7 @@ async def _health_check_loop():
 
 def start_health_checker():
     """启动后台健康检查任务。"""
-    asyncio.create_task(_health_check_loop())
+    task = asyncio.create_task(_health_check_loop())
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
     task_logger.info("[健康检查] 仓库源健康检查器已启动")

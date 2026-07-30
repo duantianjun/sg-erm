@@ -84,8 +84,8 @@ async def _init_default_admin() -> None:
             )
             session.add(admin)
             await session.commit()
-            print(f"[INFO] 已创建默认管理员账号: {settings.default_admin_username} / {settings.default_admin_password}")
-            print("[WARN] 生产环境请立即修改默认密码！")
+            print(f"[INFO] 已创建默认管理员账号: {settings.default_admin_username}")
+            print("[WARN] 请通过环境变量 SG_ERM_DEFAULT_ADMIN_PASSWORD 查看密码，并立即登录修改！")
 
 
 # OpenAPI tags 元数据

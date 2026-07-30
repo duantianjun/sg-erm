@@ -230,9 +230,9 @@ class Settings(BaseSettings):
                 "请使用 `python -c \"import secrets; print(secrets.token_hex(32))\"` 生成安全密钥"
             )
         if len(v) < 32:
-            logger.warning(
-                f"SECRET_KEY 长度 {len(v)} 过短（建议至少 32 字符），"
-                "使用短密钥可能导致安全风险"
+            raise ValueError(
+                f"SG_ERM_SECRET_KEY 长度 {len(v)} 过短（必须至少 32 字符）。"
+                "请使用 `python -c \"import secrets; print(secrets.token_hex(32))\"` 生成安全密钥"
             )
         return v
 

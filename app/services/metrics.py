@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """Prometheus 监控指标。
 
 暴露 /metrics 端点，提供以下指标：
@@ -13,10 +13,14 @@
 import shutil
 from pathlib import Path
 
+import asyncio
+
 from prometheus_client import Counter, Gauge, Histogram, generate_latest, REGISTRY
 from starlette.responses import Response
 
 from app.config import settings
+
+_background_tasks: set[asyncio.Task] = set()
 
 
 # ─── 自定义指标 ───────────────────────────────────────
@@ -184,7 +188,9 @@ def metrics_response() -> Response:
     try:
         import asyncio
         loop = asyncio.get_running_loop()
-        loop.create_task(collect_metrics())
+        task = loop.create_task(collect_metrics())
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
     except RuntimeError:
         pass
 

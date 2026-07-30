@@ -15,6 +15,8 @@
 - proxy_only: 不预同步，按需代理（永远 MISS → 拉取）
 """
 import logging
+import os
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -115,7 +117,7 @@ class ProxyEngine:
             chunk_size = self.config.io_chunk_size
 
             # 断点续传：检查是否有未完成的临时文件
-            tmp_path = Path(str(local_path) + tmp_suffix)
+            tmp_path = Path(str(local_path) + f".{os.getpid()}.{uuid.uuid4()}{tmp_suffix}")
             resume_offset = 0
             if tmp_path.exists() and tmp_path.stat().st_size > 0:
                 resume_offset = tmp_path.stat().st_size
@@ -155,8 +157,8 @@ class ProxyEngine:
                             async for chunk in resp.content.iter_chunked(chunk_size):
                                 f.write(chunk)
 
-            # 下载完成，重命名为最终文件名
-            tmp_path.rename(local_path)
+            # 下载完成，原子替换为最终文件名
+            os.replace(str(tmp_path), str(local_path))
 
             logger.info(f"MISS → 已缓存: {relative_path} ({local_path.stat().st_size} bytes)")
 
