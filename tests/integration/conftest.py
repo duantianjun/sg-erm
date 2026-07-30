@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from sqlalchemy.pool import StaticPool
 
 import httpx
+import pytest
 import pytest_asyncio
 
 
@@ -77,3 +78,43 @@ async def client(db_engine, db_session):
     app.dependency_overrides.clear()
     db_module.async_session_factory = original_factory
     db_module.async_session_maker = original_maker
+
+
+# ─── Phase 2 新增 fixture ─────────────────────────────────────
+from types import SimpleNamespace
+
+
+@pytest_asyncio.fixture
+def repo_dir(tmp_path):
+    """临时仓库根目录，替代 settings.repo_dir。"""
+    d = tmp_path / "repo"
+    d.mkdir()
+    return d
+
+
+@pytest.fixture
+def test_config(repo_dir):
+    """测试用配置对象（SimpleNamespace，避免触发 Settings 校验）。
+
+    sync_engine / proxy_engine 构造函数只读 repo_dir / proxy_mode /
+    sync_download_timeout / sync_concurrency 字段。
+    """
+    return SimpleNamespace(
+        repo_dir=repo_dir,
+        proxy_mode="hybrid",
+        sync_download_timeout=10,
+        sync_concurrency=4,
+        upstream_repo_url="https://upstream.test/repo",
+    )
+
+
+@pytest.fixture
+def patch_publish_settings(monkeypatch, repo_dir):
+    """monkeypatch publish_service 的全局 settings.repo_dir。
+
+    publish_extension 直接读 settings.repo_dir（未通过参数注入），
+    测试时需 patch 到临时目录。
+    """
+    from app.services import publish_service
+    monkeypatch.setattr(publish_service.settings, "repo_dir", repo_dir)
+    yield
