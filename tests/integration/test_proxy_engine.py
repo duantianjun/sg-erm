@@ -198,3 +198,72 @@ class TestWhitelistBypass:
 
         assert status == MISS
         assert file_path.exists()
+
+
+from types import SimpleNamespace
+
+import app.database as db_module
+import app.main as main_module
+from app.services import proxy_engine as pe_module
+
+
+@pytest.mark.integration
+class TestXCacheStatusHeader:
+    """通过 FastAPI client 验证 X-Cache-Status 响应头。
+
+    client fixture 已 patch db_module.async_session_factory 为测试 factory，
+    因此直接复用即可。全局单例 app.main.proxy_engine 需在测试内替换。
+    """
+
+    def _make_test_proxy(self, repo_dir, proxy_mode="hybrid"):
+        """构造测试用 ProxyEngine 实例，复用 client fixture 已 patch 的 session_factory。"""
+        config = SimpleNamespace(
+            repo_dir=repo_dir,
+            proxy_mode=proxy_mode,
+            sync_download_timeout=10,
+            sync_concurrency=4,
+            upstream_repo_url="https://upstream.test/repo",
+        )
+        return pe_module.ProxyEngine(
+            session_factory=db_module.async_session_factory,
+            config=config,
+        )
+
+    async def test_hit_response_has_x_cache_status_header(
+        self, client, repo_dir
+    ):
+        """HIT 响应包含 X-Cache-Status: HIT 头。"""
+        test_proxy = self._make_test_proxy(repo_dir, proxy_mode="hybrid")
+
+        # 预置缓存文件
+        pkg_path = repo_dir / "com.ongres" / "x86_64" / "linux" / "postgis-3.4-pg16.4.tar"
+        pkg_path.parent.mkdir(parents=True)
+        pkg_path.write_bytes(b"cached")
+
+        original_proxy = main_module.proxy_engine
+        main_module.proxy_engine = test_proxy
+        try:
+            resp = await client.get(
+                "/com.ongres/x86_64/linux/postgis-3.4-pg16.4.tar"
+            )
+            assert resp.status_code == 200
+            assert resp.headers.get("x-cache-status") == "HIT"
+        finally:
+            main_module.proxy_engine = original_proxy
+
+    async def test_strict_mode_miss_returns_404_without_header(
+        self, client, repo_dir
+    ):
+        """strict 模式未命中 → 404，无 X-Cache-Status 头。"""
+        test_proxy = self._make_test_proxy(repo_dir, proxy_mode="strict")
+
+        original_proxy = main_module.proxy_engine
+        main_module.proxy_engine = test_proxy
+        try:
+            resp = await client.get(
+                "/com.ongres/x86_64/linux/nonexistent-1.0-pg16.4.tar"
+            )
+            assert resp.status_code == 404
+            assert "x-cache-status" not in resp.headers
+        finally:
+            main_module.proxy_engine = original_proxy
