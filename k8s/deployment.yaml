@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sg-erm
+  namespace: stackgres
+  labels:
+    app.kubernetes.io/name: sg-erm
+    app.kubernetes.io/part-of: stackgres
+spec:
+  replicas: 1  # 单副本：SQLite + 本地文件存储不支持多写
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sg-erm
+  strategy:
+    type: Recreate  # PVC 是 RWO，滚动更新会失败
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sg-erm
+    spec:
+      containers:
+        - name: sg-erm
+          # 镜像地址：替换为你的镜像仓库
+          image: sg-erm:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 18070
+              name: http
+          envFrom:
+            - configMapRef:
+                name: sg-erm-config
+            - secretRef:
+                name: sg-erm-secret
+            - secretRef:
+                name: sg-erm-admin
+          env:
+            - name: SG_ERM_DATA_DIR
+              value: /data
+            - name: TZ
+              value: Asia/Shanghai
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          # 启动探针：给 Alembic 迁移留时间
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12  # 最多等待 60 秒
+          # 就绪探针
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          # 存活探针
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sg-erm-data

@@ -1,43 +1,44 @@
-# SG-ERM (StackGres Extension Repository Manager) Docker 镜像
-# 多阶段构建：builder 安装依赖，runtime 精简运行
+# ═══════════════════════════════════════════════════════════════
+# SG-ERM Dockerfile
+# 多阶段构建：builder 编译依赖 → runtime 精简运行
 #
 # 构建:
 #   docker build -t sg-erm:latest .
 #
 # 运行:
 #   docker run -d -p 18070:18070 \
-#     -e SG_ERM_UPSTREAM_REPO_URL=https://extensions.stackgres.io/postgres/repository \
-#     -e SG_ERM_PROXY_MODE=hybrid \
+#     -e SG_ERM_SECRET_KEY=$(python -c "import secrets; print(secrets.token_hex(32))") \
 #     -v sg-erm-data:/data \
 #     sg-erm:latest
 #
-# K8s 部署:
-#   kubectl apply -f k8s/sg-erm.yaml
+# 注意：SG_ERM_SECRET_KEY 必须通过环境变量或 .env 文件提供，
+#       Dockerfile 中不设置默认值，未设置时应用启动会报错。
+# ═══════════════════════════════════════════════════════════════
 
-# ─── Stage 1: Builder ─────────────────────────────────
-FROM python:3.11-slim AS builder
+# ─── Stage 1: Builder ─────────────────────────────────────────
+FROM python:3.12-slim AS builder
 
 LABEL stage=builder
 
 WORKDIR /build
 
-# 安装构建依赖（编译某些 Python 包需要 gcc）
+# 编译依赖（cryptography 等需要 gcc）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# 复制依赖文件并安装到 /install 目录
 COPY requirements.txt .
 RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 
-# ─── Stage 2: Runtime ─────────────────────────────────
-FROM python:3.11-slim
+# ─── Stage 2: Runtime ──────────────────────────────────────────
+FROM python:3.12-slim
 
 LABEL maintainer="SG-ERM"
-LABEL description="StackGres Extension Repository Manager - FastAPI 一体化容器"
+LABEL description="StackGres Extension Repository Manager"
+LABEL version="latest"
 
-# 安装运行时系统依赖
+# 运行时系统依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
@@ -46,16 +47,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -snf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && echo "Asia/Shanghai" > /etc/timezone
 
-# 从 builder 复制已安装的 Python 依赖
+# 从 builder 复制 Python 依赖
 COPY --from=builder /install /usr/local
 
-# 创建非 root 用户
+# 非 root 用户
 RUN groupadd -r sg-erm && useradd -r -g sg-erm -s /sbin/nologin sg-erm
 
-# 创建数据目录（PVC 挂载点）
-RUN mkdir -p /data/repo && chown -R sg-erm:sg-erm /data
+# 数据目录（PVC 挂载点）
+RUN mkdir -p /data/repo /data/logs && chown -R sg-erm:sg-erm /data
 
-# 设置工作目录
 WORKDIR /app
 
 # 复制应用代码
@@ -66,25 +66,20 @@ COPY --chown=sg-erm:sg-erm requirements.txt ./
 COPY --chown=sg-erm:sg-erm entrypoint.sh ./
 RUN chmod +x ./entrypoint.sh
 
-# 切换到非 root 用户
 USER sg-erm
 
-# 环境变量默认值
+# 环境变量默认值（不含 SECRET_KEY，必须由部署方提供）
 ENV SG_ERM_DATA_DIR=/data \
     SG_ERM_LISTEN_HOST=0.0.0.0 \
     SG_ERM_LISTEN_PORT=18070 \
     SG_ERM_PROXY_MODE=hybrid \
     SG_ERM_SYNC_CONCURRENCY=8 \
     SG_ERM_UPSTREAM_REPO_URL=https://extensions.stackgres.io/postgres/repository \
-    SG_ERM_SECRET_KEY=change-me-in-production \
     TZ=Asia/Shanghai
 
-# 暴露端口
 EXPOSE 18070
 
-# 健康检查
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD curl -fs http://localhost:18070/health || exit 1
 
-# 入口脚本：先执行数据库迁移，再启动 uvicorn
 ENTRYPOINT ["./entrypoint.sh"]

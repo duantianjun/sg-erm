@@ -1,0 +1,35 @@
+# Ingress（可选，需要 Ingress Controller）
+#
+# 使用前修改：
+#   - host 域名
+#   - TLS 证书 Secret 名称（或使用 cert-manager 自动签发）
+#
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sg-erm
+  namespace: stackgres
+  labels:
+    app.kubernetes.io/name: sg-erm
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "500m"  # 扩展包上传大小
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # cert-manager.io/cluster-issuer: letsencrypt-prod  # 自动 TLS
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - sg-erm.example.com
+      secretName: sg-erm-tls
+  rules:
+    - host: sg-erm.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: sg-erm
+                port:
+                  name: http

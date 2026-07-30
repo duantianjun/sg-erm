@@ -1,0 +1,48 @@
+# ─── ConfigMap: 应用运行参数 ──────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sg-erm-config
+  namespace: stackgres
+  labels:
+    app.kubernetes.io/name: sg-erm
+data:
+  SG_ERM_PROXY_MODE: "hybrid"
+  SG_ERM_SYNC_CONCURRENCY: "8"
+  SG_ERM_UPSTREAM_REPO_URL: "https://extensions.stackgres.io/postgres/repository"
+  SG_ERM_CACHE_MAX_DISK_USAGE: "80"
+  SG_ERM_CACHE_TTL_DAYS: "7"
+  SG_ERM_CACHE_KEEP_VERSIONS: "3"
+  SG_ERM_HEALTH_CHECK_INTERVAL: "60"
+  SG_ERM_SCHEDULER_ENABLED: "true"
+---
+# ─── Secret: JWT 签名密钥 ────────────────────────────────────
+# 生产环境必须修改！生成命令：
+#   python -c "import secrets; print(secrets.token_hex(32))"
+# 或使用 kubectl 创建：
+#   kubectl create secret generic sg-erm-secret -n stackgres \
+#     --from-literal=SG_ERM_SECRET_KEY="$(python -c 'import secrets; print(secrets.token_hex(32))')"
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sg-erm-secret
+  namespace: stackgres
+  labels:
+    app.kubernetes.io/name: sg-erm
+type: Opaque
+stringData:
+  SG_ERM_SECRET_KEY: "CHANGE_ME_TO_A_RANDOM_64_CHAR_HEX_STRING"
+---
+# ─── Secret: 默认管理员密码（可选，首次启动后修改） ──────────
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sg-erm-admin
+  namespace: stackgres
+  labels:
+    app.kubernetes.io/name: sg-erm
+type: Opaque
+stringData:
+  SG_ERM_DEFAULT_ADMIN_USERNAME: "admin"
+  SG_ERM_DEFAULT_ADMIN_PASSWORD: "CHANGE_ME_IN_PRODUCTION"
+  SG_ERM_DEFAULT_ADMIN_EMAIL: "admin@sg-erm.local"

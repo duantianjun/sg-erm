@@ -1,0 +1,14 @@
+# PodDisruptionBudget：确保维护期间至少保持 1 个 Pod 可用
+# （单副本部署下主要防止自愿驱逐导致服务中断）
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sg-erm
+  namespace: stackgres
+  labels:
+    app.kubernetes.io/name: sg-erm
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sg-erm

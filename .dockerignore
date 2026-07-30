@@ -20,27 +20,38 @@ env/
 *.swp
 *.swo
 
-# 数据文件（不应打包进镜像，通过 PVC 挂载）
+# 数据文件（通过 PVC 挂载，不打包进镜像）
 data/
 *.db
 *.db-shm
 *.db-wal
+*.log
+*.tar
+*.tgz
+*.sha256
 
 # 测试与文档
 tests/
-*.md
 docs/
+*.md
 
 # Docker 自身
 Dockerfile
 .dockerignore
 docker-compose*.yml
 
+# K8s 部署清单
+k8s/
+
 # 构建产物
 dist/
 build/
 *.egg-info/
 
-# 环境变量文件（敏感信息）
+# 环境变量文件（含敏感信息）
 .env
 .env.*
+
+# 运行时生成的密钥
+*.pem
+*.key

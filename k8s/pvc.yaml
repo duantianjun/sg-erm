@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sg-erm-data
+  namespace: stackgres
+  labels:
+    app.kubernetes.io/name: sg-erm
+spec:
+  accessModes:
+    - ReadWriteOnce  # SQLite + 本地文件不支持多写
+  resources:
+    requests:
+      storage: 100Gi  # 按实际扩展仓库大小调整
+  # storageClassName: ssd  # 建议使用 SSD 存储类
