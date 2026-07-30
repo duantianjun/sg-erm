@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """SG-ERM FastAPI 应用入口。
 
 启动流程：
@@ -34,10 +34,9 @@ from app.services.proxy_engine import proxy_engine
 from app.services.scheduler import start_scheduler, stop_scheduler
 from app.services.health_checker import start_health_checker
 
-# 路径常量
-BASE_DIR = Path(__file__).resolve().parent
-STATIC_DIR = BASE_DIR / "static"
-TEMPLATE_DIR = BASE_DIR / "templates"
+# 路径常量（从集中配置 settings 派生）
+STATIC_DIR = settings.static_dir
+TEMPLATE_DIR = settings.template_dir
 
 
 @asynccontextmanager
@@ -63,9 +62,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 async def _init_default_admin() -> None:
-    """创建默认管理员账号（admin/admin）。
+    """创建默认管理员账号（首次启动无用户时）。
 
-    仅在数据库中没有用户时创建。
+    用户名/密码/邮箱从集中配置 settings 读取。
     生产环境部署后应立即修改密码。
     """
     from sqlalchemy import func, select
@@ -77,15 +76,15 @@ async def _init_default_admin() -> None:
         count = await session.scalar(select(func.count()).select_from(User))
         if count == 0:
             admin = User(
-                username="admin",
-                password_hash=get_password_hash("admin"),
-                email="admin@sg-erm.local",
+                username=settings.default_admin_username,
+                password_hash=get_password_hash(settings.default_admin_password),
+                email=settings.default_admin_email,
                 is_admin=True,
                 is_active=True,
             )
             session.add(admin)
             await session.commit()
-            print("[INFO] 已创建默认管理员账号: admin / admin")
+            print(f"[INFO] 已创建默认管理员账号: {settings.default_admin_username} / {settings.default_admin_password}")
             print("[WARN] 生产环境请立即修改默认密码！")
 
 
@@ -384,7 +383,7 @@ async def stackgres_index():
         return FileResponse(
             str(index_path),
             media_type="application/json",
-            headers={"Cache-Control": "public, max-age=300"},
+            headers={"Cache-Control": f"public, max-age={settings.http_index_cache_max_age}"},
         )
     # 回退：重定向到上游
     return RedirectResponse(
@@ -425,7 +424,7 @@ async def stackgres_package(
             filename=f"{package_name}.tar",
             headers={
                 "X-Cache-Status": status,  # HIT 或 MISS
-                "Cache-Control": "public, max-age=86400",
+                "Cache-Control": f"public, max-age={settings.http_package_cache_max_age}",
             },
         )
 

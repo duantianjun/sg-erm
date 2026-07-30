@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """SQLAlchemy 2.0 异步数据库引擎。
 
 特性：
@@ -59,22 +59,25 @@ async def init_db() -> None:
     - 启用外键约束
     - 优化并发写性能
 
+    所有 SQLite PRAGMA 参数从集中配置 settings 读取。
     注意：生产环境表结构由 Alembic 迁移管理，这里不自动建表。
     """
     # 确保数据目录存在
     settings.data_dir.mkdir(parents=True, exist_ok=True)
     settings.repo_dir.mkdir(parents=True, exist_ok=True)
 
-    # 启用 WAL 与外键，优化并发性能
+    # 启用 WAL 与外键，优化并发性能（参数全部集中配置）
     async with engine.begin() as conn:
-        # WAL 模式：读写不互斥，适合单写多读场景
-        await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
-        # 外键约束
-        await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
-        # NORMAL 同步模式：WAL 下安全且更快
-        await conn.exec_driver_sql("PRAGMA synchronous=NORMAL")
-        # 写忙等待 5 秒，避免 SQLITE_BUSY
-        await conn.exec_driver_sql("PRAGMA busy_timeout=5000")
+        if settings.db_enable_wal:
+            # WAL 模式：读写不互斥，适合单写多读场景
+            await conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+        if settings.db_enable_foreign_keys:
+            # 外键约束
+            await conn.exec_driver_sql("PRAGMA foreign_keys=ON")
+        # 同步模式由配置决定
+        await conn.exec_driver_sql(f"PRAGMA synchronous={settings.db_synchronous}")
+        # 写忙等待（毫秒），避免 SQLITE_BUSY
+        await conn.exec_driver_sql(f"PRAGMA busy_timeout={settings.db_busy_timeout_ms}")
 
 
 async def close_db() -> None:

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """仓库源自动健康检查。
 
 定期对所有启用的仓库源发送 HEAD 请求探测 index.json 可达性，
@@ -28,29 +28,35 @@ from app.services.naming import get_index_url
 logger = logging.getLogger(__name__)
 task_logger = get_task_logger()
 
-# 连续失败次数阈值，达到后标记为 down
-CONSECUTIVE_FAILURE_THRESHOLD = 3
+# 连续失败次数阈值，达到后标记为 down（从集中配置读取）
+CONSECUTIVE_FAILURE_THRESHOLD = settings.health_consecutive_failure_threshold
 
 
 async def check_single_source(
     source: RepositorySource,
-    timeout: float = 10.0,
+    timeout: float | None = None,
 ) -> tuple[str, float]:
     """检查单个仓库源的健康状态。
+
+    超时、降级阈值均从集中配置 settings 读取。
 
     Returns:
         (status, latency_seconds)
     """
     url = get_index_url(source.url)
 
+    # 从配置中获取默认超时和降级阈值
+    actual_timeout = timeout if timeout is not None else settings.health_check_timeout
+    degraded_threshold = settings.health_degraded_latency_sec
+
     try:
         start = time.monotonic()
-        timeout_obj = aiohttp.ClientTimeout(total=timeout)
+        timeout_obj = aiohttp.ClientTimeout(total=actual_timeout)
         async with aiohttp.ClientSession(timeout=timeout_obj) as session:
             async with session.head(url, allow_redirects=True) as resp:
                 latency = time.monotonic() - start
                 if resp.status < 400:
-                    if latency > 5.0:
+                    if latency > degraded_threshold:
                         return "degraded", latency
                     return "healthy", latency
                 else:
@@ -106,11 +112,11 @@ async def run_health_check() -> dict:
 # ─── 调度集成 ─────────────────────────────────────────────
 
 async def _health_check_loop():
-    """持续运行的健康检查循环。"""
-    # 首次启动延迟 10 秒，等待系统初始化
-    await asyncio.sleep(10)
+    """持续运行的健康检查循环（参数从集中配置读取）。"""
+    # 首次启动延迟，等待系统初始化
+    await asyncio.sleep(settings.health_initial_delay_sec)
 
-    interval = getattr(settings, "health_check_interval", 60)
+    interval = settings.health_check_interval
 
     while True:
         try:

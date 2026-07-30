@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """StackGres 扩展包命名工具。
 
 从 sync-stackgres-repo.py 迁移的核心函数，与 StackGres Java 端的
@@ -7,15 +7,18 @@ ExtensionUtil.getExtensionPackageName() 和 getExtensionPackageUri() 保持一�
 包名格式: {name}-{version}-{flavor}{pgVersion}[-build-{build}]
 URL 格式: {repositoryUri}/{publisher}/{arch}/{os}/{packageName}.tar
 index.json 路径: {repositoryUri}/v2/index.json
+
+所有默认值从集中配置 app.config.settings 读取，不再硬编码。
 """
+from app.config import settings
 
-# index.json 相对路径
-INDEX_PATH = "v2/index.json"
+# index.json 相对路径（从集中配置读取）
+INDEX_PATH = settings.index_path
 
-# 默认值
-DEFAULT_ARCH = "x86_64"
-DEFAULT_OS = "linux"
-DEFAULT_PUBLISHER = "com.ongres"
+# 默认值（从集中配置读取）
+DEFAULT_ARCH = settings.default_arch
+DEFAULT_OS = settings.default_os
+DEFAULT_PUBLISHER = settings.default_publisher
 
 
 def get_package_name(

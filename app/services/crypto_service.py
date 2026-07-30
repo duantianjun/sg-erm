@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """RSA 密钥管理服务。
 
 为自定义扩展发布者管理 RSA 2048 密钥对：
@@ -22,19 +22,14 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# 常量
-KEY_SIZE = 2048
-SALT_LEN = 16
-NONCE_LEN = 12
-
 
 def _derive_key(password: str, salt: bytes) -> bytes:
-    """从密码和盐派生 AES-256 密钥。"""
+    """从密码和盐派生 AES-256 密钥（参数均从集中配置读取）。"""
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
         salt=salt,
-        iterations=100_000,
+        iterations=settings.pbkdf2_iterations,
     )
     return kdf.derive(password.encode("utf-8"))
 
@@ -43,27 +38,30 @@ def encrypt_private_key(private_key_pem: str, password: str) -> str:
     """用密码加密私钥 PEM 字符串。
 
     格式: base64(salt + nonce + ciphertext)
+    参数从集中配置 settings 读取。
     """
-    salt = os.urandom(SALT_LEN)
-    nonce = os.urandom(NONCE_LEN)
+    salt = os.urandom(settings.kdf_salt_len)
+    nonce = os.urandom(settings.aes_nonce_len)
     key = _derive_key(password, salt)
 
     aesgcm = AESGCM(key)
     ciphertext = aesgcm.encrypt(nonce, private_key_pem.encode("utf-8"), None)
 
-    # salt(16) + nonce(12) + ciphertext
+    # salt + nonce + ciphertext
     combined = salt + nonce + ciphertext
     logger.debug(f"[加密服务] 私钥加密完成 ciphertext_len={len(ciphertext)} bytes")
     return combined.hex()
 
 
 def decrypt_private_key(encrypted: str, password: str) -> str:
-    """解密私钥 PEM 字符串。"""
+    """解密私钥 PEM 字符串（参数从集中配置读取）。"""
     try:
         combined = bytes.fromhex(encrypted)
-        salt = combined[:SALT_LEN]
-        nonce = combined[SALT_LEN : SALT_LEN + NONCE_LEN]
-        ciphertext = combined[SALT_LEN + NONCE_LEN :]
+        salt_len = settings.kdf_salt_len
+        nonce_len = settings.aes_nonce_len
+        salt = combined[:salt_len]
+        nonce = combined[salt_len : salt_len + nonce_len]
+        ciphertext = combined[salt_len + nonce_len :]
 
         key = _derive_key(password, salt)
         aesgcm = AESGCM(key)
@@ -76,15 +74,16 @@ def decrypt_private_key(encrypted: str, password: str) -> str:
 
 
 def generate_key_pair() -> tuple[str, str]:
-    """生成 RSA 2048 密钥对。
+    """生成 RSA 密钥对，密钥长度从集中配置读取。
 
     Returns:
         (private_key_pem, public_key_pem)
     """
-    logger.info(f"[加密服务] 开始生成 RSA {KEY_SIZE} 密钥对")
+    key_size = settings.rsa_key_size
+    logger.info(f"[加密服务] 开始生成 RSA {key_size} 密钥对")
     private_key = rsa.generate_private_key(
         public_exponent=65537,
-        key_size=KEY_SIZE,
+        key_size=key_size,
     )
 
     private_pem = private_key.private_bytes(
@@ -130,8 +129,9 @@ def sign_sha256_file(private_key_pem: str, tgz_path: str) -> bytes:
     # 读取 .tgz 文件并计算 SHA256
     hasher = hashlib.sha256()
     file_size = 0
+    chunk_size = settings.file_hash_chunk_size
     with open(tgz_path, "rb") as f:
-        while chunk := f.read(65536):
+        while chunk := f.read(chunk_size):
             hasher.update(chunk)
             file_size += len(chunk)
     digest = hasher.hexdigest()

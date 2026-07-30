@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """异步同步引擎。
 
 核心流程：
@@ -467,7 +467,9 @@ class SyncEngine:
                 async with semaphore:
                     local_file = self.config.repo_dir / pkg["local_path"]
                     pkg_name = pkg["package_name"]
-                    tmp_file = Path(str(local_file) + ".tmp")
+                    tmp_suffix = self.config.temp_file_suffix
+                    tmp_file = Path(str(local_file) + tmp_suffix)
+                    chunk_size = self.config.io_chunk_size
 
                     # 检查是否已下载完成
                     if local_file.exists() and local_file.stat().st_size > 0:
@@ -503,7 +505,7 @@ class SyncEngine:
                                 async with http_session.get(url) as resp2:
                                     resp2.raise_for_status()
                                     with open(tmp_file, "wb") as f:
-                                        async for chunk in resp2.content.iter_chunked(8192):
+                                        async for chunk in resp2.content.iter_chunked(chunk_size):
                                             f.write(chunk)
                             elif resp.status == 206:
                                 # Partial Content — 续传
@@ -512,12 +514,12 @@ class SyncEngine:
                                     f"从 {resume_offset} 字节继续"
                                 )
                                 with open(tmp_file, "ab") as f:
-                                    async for chunk in resp.content.iter_chunked(8192):
+                                    async for chunk in resp.content.iter_chunked(chunk_size):
                                         f.write(chunk)
                             else:
                                 resp.raise_for_status()
                                 with open(tmp_file, "wb") as f:
-                                    async for chunk in resp.content.iter_chunked(8192):
+                                    async for chunk in resp.content.iter_chunked(chunk_size):
                                         f.write(chunk)
 
                         # 下载完成，重命名为最终文件名

@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """认证服务。
 
 提供 JWT 生成/验证、密码哈希、当前用户获取。
@@ -36,8 +36,9 @@ pwd_context = CryptContext(
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login", auto_error=False)
 
-API_TOKEN_PREFIX = "sgerm_"
-TOKEN_PREFIX_LEN = 8
+# 从集中配置读取 API Token 相关常量
+API_TOKEN_PREFIX = settings.api_token_prefix
+TOKEN_PREFIX_LEN = settings.token_prefix_len
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
@@ -70,7 +71,7 @@ def create_access_token(
 def create_refresh_token(data: dict) -> str:
     to_encode = data.copy()
     now = datetime.now(timezone.utc)
-    expire = now + timedelta(days=7)
+    expire = now + timedelta(days=settings.refresh_token_expire_days)
     to_encode.update({"exp": expire, "type": "refresh", "iat": now})
     encoded_jwt = jwt.encode(
         to_encode,
@@ -199,7 +200,7 @@ async def increment_token_version(
 def generate_api_token() -> str:
     import secrets
 
-    return API_TOKEN_PREFIX + secrets.token_urlsafe(32)
+    return API_TOKEN_PREFIX + secrets.token_urlsafe(settings.api_token_random_bytes)
 
 
 def get_token_prefix(token: str) -> str:

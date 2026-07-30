@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """仓库文件浏览器 API。
 
 提供本地仓库中缓存扩展包的浏览、删除、重新下载、SHA256 验证和一致性检查。
@@ -291,6 +291,7 @@ async def redownload_package(
     try:
         os.makedirs(os.path.dirname(local_file), exist_ok=True)
         timeout = aiohttp.ClientTimeout(total=settings.sync_download_timeout)
+        chunk_size = settings.io_chunk_size
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
                 if resp.status == 404:
@@ -298,7 +299,7 @@ async def redownload_package(
                     return error_response("上游包不存在", status_code=502)
                 resp.raise_for_status()
                 with open(local_file, "wb") as f:
-                    async for chunk in resp.content.iter_chunked(8192):
+                    async for chunk in resp.content.iter_chunked(chunk_size):
                         f.write(chunk)
     except aiohttp.ClientError as e:
         logger.warning("重新下载失败 %s: %s", url, e)

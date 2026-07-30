@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """混合模式代理引擎。
 
 核心流程（设计文档 5.5）：
@@ -110,8 +110,12 @@ class ProxyEngine:
             # 确保目录存在
             local_path.parent.mkdir(parents=True, exist_ok=True)
 
+            # 从配置读取 IO 相关参数
+            tmp_suffix = self.config.temp_file_suffix
+            chunk_size = self.config.io_chunk_size
+
             # 断点续传：检查是否有未完成的临时文件
-            tmp_path = Path(str(local_path) + ".tmp")
+            tmp_path = Path(str(local_path) + tmp_suffix)
             resume_offset = 0
             if tmp_path.exists() and tmp_path.stat().st_size > 0:
                 resume_offset = tmp_path.stat().st_size
@@ -134,7 +138,7 @@ class ProxyEngine:
                         async with http_session.get(url) as resp2:
                             resp2.raise_for_status()
                             with open(tmp_path, "wb") as f:
-                                async for chunk in resp2.content.iter_chunked(8192):
+                                async for chunk in resp2.content.iter_chunked(chunk_size):
                                     f.write(chunk)
                     elif resp.status == 206:
                         # Partial Content — 续传
@@ -143,12 +147,12 @@ class ProxyEngine:
                             f"从 {resume_offset} 字节继续"
                         )
                         with open(tmp_path, "ab") as f:
-                            async for chunk in resp.content.iter_chunked(8192):
+                            async for chunk in resp.content.iter_chunked(chunk_size):
                                 f.write(chunk)
                     else:
                         resp.raise_for_status()
                         with open(tmp_path, "wb") as f:
-                            async for chunk in resp.content.iter_chunked(8192):
+                            async for chunk in resp.content.iter_chunked(chunk_size):
                                 f.write(chunk)
 
             # 下载完成，重命名为最终文件名
@@ -206,11 +210,12 @@ class ProxyEngine:
         try:
             index_path.parent.mkdir(parents=True, exist_ok=True)
             timeout = aiohttp.ClientTimeout(total=self.config.sync_download_timeout)
+            chunk_size = self.config.io_chunk_size
             async with aiohttp.ClientSession(timeout=timeout) as http_session:
                 async with http_session.get(url) as resp:
                     resp.raise_for_status()
                     with open(index_path, "wb") as f:
-                        async for chunk in resp.content.iter_chunked(8192):
+                        async for chunk in resp.content.iter_chunked(chunk_size):
                             f.write(chunk)
 
             logger.info(f"index.json 已缓存: {index_path}")
