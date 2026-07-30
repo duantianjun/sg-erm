@@ -114,7 +114,11 @@ def patch_publish_settings(monkeypatch, repo_dir):
 
     publish_extension 直接读 settings.repo_dir（未通过参数注入），
     测试时需 patch 到临时目录。
+
+    注意：repo_dir 是 Settings 上的 @property（由 data_dir/repo_dirname 派生），
+    无 setter，故在类上替换属性描述符而非实例赋值。
     """
-    from app.services import publish_service
-    monkeypatch.setattr(publish_service.settings, "repo_dir", repo_dir)
+    from app.config import Settings
+
+    monkeypatch.setattr(Settings, "repo_dir", property(lambda self: repo_dir))
     yield
