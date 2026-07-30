@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """安全模型：用户与 API 令牌。
 
 User: 管理员账号（用户名+密码 → JWT）
@@ -46,7 +46,7 @@ class ApiToken(TimestampMixin, Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     token_hash: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
-    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    token_prefix: Mapped[str] = mapped_column(String(16), nullable=False)
     type: Mapped[str] = mapped_column(String(50), default="read")
     permissions: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
