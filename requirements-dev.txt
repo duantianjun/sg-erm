@@ -1,0 +1,7 @@
+# SG-ERM 测试依赖
+pytest>=8.0
+pytest-asyncio>=0.23
+httpx>=0.27          # ASGITransport + API 测试
+pytest-cov>=4.1      # 覆盖率可见（不设 fail-under，仅报告）
+aioresponses>=0.7    # aiohttp 上游 mock
+freezegun>=1.4       # 时间冻结（JWT exp / TTL 测试）
