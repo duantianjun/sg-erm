@@ -105,6 +105,8 @@ def test_config(repo_dir):
         sync_download_timeout=10,
         sync_concurrency=4,
         upstream_repo_url="https://upstream.test/repo",
+        temp_file_suffix=".tmp",
+        io_chunk_size=8192,
     )
 
 
