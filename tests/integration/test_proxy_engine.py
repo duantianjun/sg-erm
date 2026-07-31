@@ -169,6 +169,120 @@ class TestHitMissNotFound:
 
 
 @pytest.mark.integration
+class TestSimulatedDownloadFlow:
+    """模拟下载完整流程测试。
+
+    覆盖场景：
+    1. MISS: 首次请求 → 从上游拉取 → 写入缓存
+    2. HIT:  再次请求 → 直接读缓存（不发 HTTP）
+    3. 缓存文件路径与内容校验
+    4. 多源 URL 构造（含空 arch/os 的默认值处理）
+    """
+
+    async def test_miss_then_hit_full_workflow(
+        self, db_engine, db_session, repo_dir, test_config, monkeypatch
+    ):
+        """MISS → 缓存 → HIT 完整流程。"""
+        engine = _make_engine(db_engine, test_config)
+
+        async def fake_get_upstream():
+            return "https://upstream.test/repo"
+        monkeypatch.setattr(engine, "_get_upstream_url", fake_get_upstream)
+
+        async def fake_mark_cached(publisher, arch, os_name, package_name):
+            pass
+        monkeypatch.setattr(engine, "_mark_cached", fake_mark_cached)
+
+        pkg_name = "postgis-3.4-pg16.4"
+        upstream_url = get_package_url(
+            "https://upstream.test/repo", "com.ongres", "x86_64", "linux", pkg_name
+        )
+        expected_local = repo_dir / "com.ongres" / "x86_64" / "linux" / f"{pkg_name}.tar"
+        assert not expected_local.exists()
+
+        # 1. MISS: 首次请求
+        with aioresponses() as m:
+            m.get(upstream_url, status=200, body=b"downloaded-payload")
+            file_path_1, status_1 = await engine.handle_package_request(
+                "com.ongres", "x86_64", "linux", pkg_name
+            )
+
+        assert status_1 == MISS
+        assert file_path_1 is not None
+        assert file_path_1.exists()
+        assert file_path_1.read_bytes() == b"downloaded-payload"
+        # 验证文件落到预期路径
+        assert file_path_1 == expected_local
+
+        # 2. HIT: 再次请求同一包（不应发起 HTTP）
+        with aioresponses() as m:
+            # 若误发起 HTTP，aioresponses 未注册会抛异常
+            file_path_2, status_2 = await engine.handle_package_request(
+                "com.ongres", "x86_64", "linux", pkg_name
+            )
+
+        assert status_2 == HIT
+        assert file_path_2 == expected_local
+        assert file_path_2.read_bytes() == b"downloaded-payload"
+
+    async def test_miss_with_empty_arch_uses_default(
+        self, db_engine, db_session, repo_dir, test_config, monkeypatch
+    ):
+        """arch 为空字符串 → get_arch 默认值 x86_64，URL 不出现双斜杠。"""
+        from app.services.naming import get_arch, get_os, DEFAULT_ARCH, DEFAULT_OS
+        assert get_arch("") == DEFAULT_ARCH
+        assert get_os("") == DEFAULT_OS
+
+        engine = _make_engine(db_engine, test_config)
+        async def fake_get_upstream():
+            return "https://upstream.test/repo"
+        monkeypatch.setattr(engine, "_get_upstream_url", fake_get_upstream)
+        async def fake_mark_cached(*args):
+            pass
+        monkeypatch.setattr(engine, "_mark_cached", fake_mark_cached)
+
+        # 即使上游 index.json 返回 arch="", 代理应使用默认值构造 URL
+        upstream_url = get_package_url(
+            "https://upstream.test/repo",
+            "com.ongres",
+            get_arch(""),
+            get_os(""),
+            "adminpack-2.1-pg16.4",
+        )
+        # 排除 scheme 后的 '://'，路径段不应含 '//'
+        path_part = upstream_url.split("://", 1)[1]
+        assert "//" not in path_part, f"URL 路径含双斜杠: {upstream_url}"
+
+        with aioresponses() as m:
+            m.get(upstream_url, status=200, body=b"adminpack-payload")
+            file_path, status = await engine.handle_package_request(
+                "com.ongres", get_arch(""), get_os(""), "adminpack-2.1-pg16.4"
+            )
+
+        assert status == MISS
+        assert file_path.exists()
+        assert file_path.read_bytes() == b"adminpack-payload"
+
+    async def test_hit_no_http_call(
+        self, db_engine, db_session, repo_dir, test_config, monkeypatch
+    ):
+        """HIT 不发起任何 HTTP 请求（aioresponses 未注册 URL 时调用会抛异常）。"""
+        engine = _make_engine(db_engine, test_config)
+        pkg_path = repo_dir / "com.ongres" / "x86_64" / "linux" / "pgvector-0.6-pg16.tar"
+        pkg_path.parent.mkdir(parents=True, exist_ok=True)
+        pkg_path.write_bytes(b"already cached")
+
+        with aioresponses() as m:
+            # 不注册任何 URL — 若 engine 发起 HTTP 必抛异常
+            file_path, status = await engine.handle_package_request(
+                "com.ongres", "x86_64", "linux", "pgvector-0.6-pg16"
+            )
+
+        assert status == HIT
+        assert file_path == pkg_path
+
+
+@pytest.mark.integration
 class TestWhitelistBypass:
     async def test_proxy_does_not_check_whitelist(
         self, db_engine, db_session, repo_dir, test_config, monkeypatch

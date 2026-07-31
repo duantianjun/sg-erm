@@ -71,13 +71,13 @@ def get_flavor_prefix(flavor: str | None) -> str:
 
 
 def get_arch(arch: str | None) -> str:
-    """获取架构，None 时返回默认值。"""
-    return arch if arch is not None else DEFAULT_ARCH
+    """获取架构，None 或空字符串时返回默认值。"""
+    return arch if arch else DEFAULT_ARCH
 
 
 def get_os(os_name: str | None) -> str:
-    """获取操作系统，None 时返回默认值。"""
-    return os_name if os_name is not None else DEFAULT_OS
+    """获取操作系统，None 或空字符串时返回默认值。"""
+    return os_name if os_name else DEFAULT_OS
 
 
 def get_publisher_name(publisher: str | None) -> str:
