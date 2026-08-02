@@ -1,9 +1,9 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """审计日志模型。
 
 记录所有关键操作：sync.start, sync.complete, publish, delete, login, config.change 等。
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, String, Text
@@ -19,7 +19,7 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=generate_uuid)
-    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     actor: Mapped[str] = mapped_column(String(255), nullable=False)  # 操作者
     action: Mapped[str] = mapped_column(String(100), nullable=False)
     # sync.start/sync.complete/publish/delete/login/config.change/token.create/token.revoke
