@@ -6,7 +6,9 @@
 2. TTL 清理：超过 cache_ttl_days 未访问的包
 3. 版本保留：每个扩展只保留最新 cache_keep_versions 个版本
 
-提供手动触发和定时自动执行。
+触发方式：
+- 手动：POST /api/v1/dashboard/cache/evict
+- 定时：由 scheduler 按 cache_eviction_interval 间隔自动执行
 """
 import logging
 import os

@@ -2,18 +2,11 @@
 """SG-ERM FastAPI 应用入口。
 
 启动流程：
-1. lifespan 启动时初始化数据库
-2. 挂载静态文件（layui 资产）
-3. 注册 Jinja2 模板
-4. 提供 /health 健康检查端点
-5. 提供 / 首页（渲染 base.html 占位，Task 5 替换为完整仪表盘）
-
-验证目标：
-    cd e:\\stackgres\\sg-erm
-    uvicorn app.main:app --port 18070
-    - /health 返回 {"status":"healthy","version":"0.1.0"}
-    - /static/layui/layui.js 返回 200
-    - / 返回 HTML 页面
+1. lifespan 启动时初始化数据库和默认管理员
+2. 启动后台调度器（同步策略、缓存淘汰、指标收集）
+3. 启动仓库源健康检查
+4. 挂载静态文件和 Jinja2 模板
+5. 提供 /health 健康检查和 / 首页（仪表盘）
 """
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -268,8 +261,7 @@ async def metrics():
 
 
 # ─── Web 界面页面路由 ─────────────────────────────────────────────
-# Phase 1 已实现页面: dashboard, extensions, sync, sources, whitelist
-# Phase 2 待实现页面: publish, audit, settings（渲染占位模板）
+# 已实现页面: dashboard, extensions, sync, sources, whitelist, publish, audit, settings
 
 
 @app.get("/login", response_class=HTMLResponse)

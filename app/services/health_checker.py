@@ -71,6 +71,13 @@ async def check_single_source(
 async def run_health_check() -> dict:
     """对所有启用的仓库源执行一轮健康检查。
 
+    连续失败计数逻辑：
+    - 检查成功 → consecutive_failures=0, health_status=healthy
+    - 检查返回 degraded → consecutive_failures 不变, health_status=degraded
+    - 检查返回 down → consecutive_failures+=1
+      - consecutive_failures >= 阈值 → health_status=down
+      - consecutive_failures < 阈值 → health_status=degraded（间歇性失败）
+
     Returns:
         {"checked": N, "results": [{"id": ..., "name": ..., "status": ..., "latency": ...}]}
     """
@@ -82,29 +89,46 @@ async def run_health_check() -> dict:
         )
         sources = result.scalars().all()
 
+    threshold = CONSECUTIVE_FAILURE_THRESHOLD
     results = []
-    for source in sources:
-        status, latency = await check_single_source(source)
 
-        # 更新数据库中的健康状态
+    for source in sources:
+        check_status, latency = await check_single_source(source)
+
+        # 根据连续失败计数决定最终状态
         async with async_session_factory() as session:
             src = await session.get(RepositorySource, source.id)
             if src:
                 old_status = src.health_status
-                src.health_status = status
+
+                if check_status == "healthy":
+                    src.consecutive_failures = 0
+                    src.health_status = "healthy"
+                elif check_status == "down":
+                    src.consecutive_failures += 1
+                    if src.consecutive_failures >= threshold:
+                        src.health_status = "down"
+                    else:
+                        src.health_status = "degraded"
+                else:  # degraded
+                    src.health_status = "degraded"
 
                 # 从 down 恢复时记录日志
-                if old_status == "down" and status == "healthy":
+                if old_status == "down" and src.health_status == "healthy":
                     src.last_sync_status = "success"
                     task_logger.info(f"[健康检查] 源 {source.name} 已恢复健康")
 
                 await session.commit()
 
+                final_status = src.health_status
+            else:
+                final_status = check_status
+
         results.append({
             "id": source.id,
             "name": source.name,
             "url": source.url,
-            "status": status,
+            "status": final_status,
             "latency": round(latency, 3),
         })
 

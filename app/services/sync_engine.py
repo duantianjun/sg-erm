@@ -537,9 +537,6 @@ class SyncEngine:
                         logger.warning(f"下载失败 {pkg_name}: {e}")
                         return f"error"
 
-                    finally:
-                        pass
-
             # 使用 asyncio.gather 并发下载
             results = await asyncio.gather(
                 *[download_one(pkg) for pkg in packages],

@@ -116,7 +116,9 @@ http_request_duration_seconds = Histogram(
 async def collect_metrics() -> None:
     """从数据库和文件系统收集最新指标值。
 
-    由定时任务调用（每 30 秒）。
+    触发方式：
+    - 定时：由 scheduler 按 metrics_collect_interval 间隔自动执行（默认 30 秒）
+    - 惰性：/metrics 端点被 scrape 时异步触发
     """
     from sqlalchemy import func, select
 

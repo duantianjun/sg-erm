@@ -1,4 +1,4 @@
-﻿# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
 """仓库源模型。
 
 管理上游扩展仓库源（官方/第三方/自建）。
@@ -28,6 +28,7 @@ class RepositorySource(TimestampMixin, Base):
     last_sync: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     last_sync_status: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     health_status: Mapped[str] = mapped_column(String(50), default="unknown")
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0)
     auth_type: Mapped[str] = mapped_column(String(50), default="none")
     auth_config: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     proxy_url: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
